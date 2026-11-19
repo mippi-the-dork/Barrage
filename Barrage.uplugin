@@ -1,0 +1,24 @@
+{
+  "FileVersion": 3,
+  "Version": 9,
+  "VersionName": "0.1.0-dev09",
+  "FriendlyName": "Barrage",
+  "Description": "Data-oriented bullet hell projectile simulation, patterns, and attack sequencing.",
+  "Category": "Gameplay",
+  "CreatedBy": "Mippi the Dork",
+  "CanContainContent": true,
+  "IsBetaVersion": true,
+  "EnabledByDefault": false,
+  "Modules": [
+    {
+      "Name": "BarrageRuntime",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    },
+    {
+      "Name": "BarrageEditor",
+      "Type": "Editor",
+      "LoadingPhase": "Default"
+    }
+  ]
+}

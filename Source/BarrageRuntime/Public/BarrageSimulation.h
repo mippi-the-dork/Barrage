@@ -1,0 +1,101 @@
+#pragma once
+#include "CoreMinimal.h"
+#include "BarrageTypes.h"
+#include "Templates/Function.h"
+#include "Engine/EngineTypes.h"
+
+// Query and result records are plain values. UE collision, custom analytic geometry, or a
+// test fixture can provide exactly the same callback; no projectile needs an Actor.
+struct BARRAGERUNTIME_API FBarrageCollisionQuery
+{
+    FVector Start = FVector::ZeroVector;
+    FVector End = FVector::ZeroVector;
+    float Radius = 0.0f;
+    ECollisionChannel Channel = ECC_Visibility;
+    TWeakObjectPtr<AActor> SourceActor;
+    TWeakObjectPtr<AActor> LastHitActor;
+};
+
+struct BARRAGERUNTIME_API FBarrageCollisionHit
+{
+    FVector Location = FVector::ZeroVector; // swept projectile center at contact
+    FVector Normal = FVector::UpVector;
+    float Time = 1.0f; // normalized segment fraction
+    FHitResult EngineHit; // populated by the UWorld adapter, optional for analytic adapters
+};
+
+struct BARRAGERUNTIME_API FBarrageImpactRecord
+{
+    FBarrageProjectileHandle Handle;
+    FVector Location = FVector::ZeroVector;
+    FVector Normal = FVector::UpVector;
+    FVector IncomingVelocity = FVector::ZeroVector;
+    FHitResult EngineHit;
+    TWeakObjectPtr<AActor> SourceActor;
+    EBarragePayloadMode PayloadMode = EBarragePayloadMode::None;
+    float PointDamage = 0.0f;
+};
+
+// Optional per-step counters; recording them never requires querying a UWorld.
+struct BARRAGERUNTIME_API FBarrageStepMetrics
+{
+    int32 ProjectilesVisited = 0;
+    int32 CollisionQueries = 0;
+    int32 CollisionHits = 0;
+    int32 RemovedProjectiles = 0;
+};
+
+// No UObjects or Actors per projectile. All functions are single-threaded in this pass.
+// External gravity callbacks must be invoked only on their safe thread; the world subsystem
+// currently runs simulation on the game thread.
+class BARRAGERUNTIME_API FBarrageSimulation
+{
+public:
+    using FGravitySampler = TFunction<FVector(const FVector&)>;
+    using FCollisionSampler = TFunction<bool(const FBarrageCollisionQuery&, FBarrageCollisionHit&)>;
+
+    FBarrageProjectileHandle Spawn(const FBarrageSpawnParams& Params, const FVector& InitialProviderAcceleration = FVector::ZeroVector);
+    bool Destroy(const FBarrageProjectileHandle& Handle);
+    bool GetSnapshot(const FBarrageProjectileHandle& Handle, FBarrageProjectileSnapshot& OutSnapshot) const;
+    void Step(float StepSeconds, const FVector& WorldAcceleration, const FGravitySampler& ProviderSampler,
+        TArray<FBarrageImpactRecord>* OutImpacts = nullptr, const FCollisionSampler& CollisionSampler = FCollisionSampler(),
+        FBarrageStepMetrics* OutMetrics = nullptr);
+    void Clear();
+    int32 Num() const { return Positions.Num(); }
+    FVector GetPositionAt(int32 DenseIndex) const { return Positions.IsValidIndex(DenseIndex) ? Positions[DenseIndex] : FVector::ZeroVector; }
+    FVector GetVelocityAt(int32 DenseIndex) const { return Velocities.IsValidIndex(DenseIndex) ? Velocities[DenseIndex] : FVector::ZeroVector; }
+    int32 GetRenderStyleAt(int32 DenseIndex) const { return RenderStyleIds.IsValidIndex(DenseIndex) ? RenderStyleIds[DenseIndex] : 0; }
+    float GetRenderScaleAt(int32 DenseIndex) const { return RenderScales.IsValidIndex(DenseIndex) ? RenderScales[DenseIndex] : 1.0f; }
+private:
+    struct FSlot { int32 Index = INDEX_NONE; int32 Generation = 1; };
+    TArray<FVector> Positions;
+    TArray<FVector> PreviousPositions;
+    TArray<FVector> Velocities;
+    TArray<FVector> Accelerations;
+    TArray<EBarrageGravityMode> Modes;
+    TArray<EBarrageMotionMode> Motions;
+    TArray<FVector> OrbitCenters;
+    TArray<FVector> OrbitAxes;
+    TArray<float> OrbitRates;
+    TArray<float> OrbitReleases;
+    TArray<float> Ages;
+    TArray<float> Lifetimes;
+    TArray<EBarrageCollisionMode> CollisionModes;
+    TArray<float> CollisionRadii;
+    TArray<ECollisionChannel> CollisionChannels;
+    TArray<int32> RemainingBounces;
+    TArray<int32> RemainingPierces;
+    TArray<float> Restitutions;
+    TArray<float> TangentialRetentions;
+    TArray<EBarragePayloadMode> PayloadModes;
+    TArray<float> DamageAmounts;
+    TArray<TWeakObjectPtr<AActor>> SourceActors;
+    TArray<uint8> IgnoreSourcesForCollision;
+    TArray<int32> RenderStyleIds;
+    TArray<float> RenderScales;
+    TArray<int32> DenseToSlot;
+    TArray<FSlot> Slots;
+    TArray<int32> FreeSlots;
+    int32 Resolve(const FBarrageProjectileHandle& Handle) const;
+    void RemoveDense(int32 DenseIndex);
+};
