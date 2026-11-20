@@ -1,5 +1,6 @@
 #include "BarrageAssetDefinitions.h"
 #include "BarrageAssets.h"
+#include "BarragePatternAssetEditor.h"
 
 namespace
 {
@@ -24,3 +25,16 @@ FText UBarrageSequenceAssetDefinition::GetAssetDisplayName() const { return NSLO
 FLinearColor UBarrageSequenceAssetDefinition::GetAssetColor() const { return FLinearColor(0.7f, 0.4f, 0.85f); }
 TSoftClassPtr<UObject> UBarrageSequenceAssetDefinition::GetAssetClass() const { return UBarrageSequence::StaticClass(); }
 TConstArrayView<FAssetCategoryPath> UBarrageSequenceAssetDefinition::GetAssetCategories() const { return BarrageGameplayCategory(); }
+
+EAssetCommandResult UBarragePatternAssetDefinition::OpenAssets(const FAssetOpenArgs& OpenArgs) const
+{
+    bool bOpenedAny = false;
+    for (UBarragePattern* Pattern : OpenArgs.LoadObjects<UBarragePattern>())
+    {
+        if (!IsValid(Pattern)) continue;
+        TSharedRef<FBarragePatternAssetEditor> Editor = MakeShared<FBarragePatternAssetEditor>();
+        Editor->Initialize(OpenArgs.GetToolkitMode(), OpenArgs.ToolkitHost, Pattern);
+        bOpenedAny = true;
+    }
+    return bOpenedAny ? EAssetCommandResult::Handled : EAssetCommandResult::Unhandled;
+}

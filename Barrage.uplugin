@@ -1,7 +1,7 @@
 {
   "FileVersion": 3,
-  "Version": 9,
-  "VersionName": "0.1.0-dev09",
+  "Version": 11,
+  "VersionName": "0.1.0-dev11",
   "FriendlyName": "Barrage",
   "Description": "Data-oriented bullet hell projectile simulation, patterns, and attack sequencing.",
   "Category": "Gameplay",
