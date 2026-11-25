@@ -262,7 +262,7 @@ bool FBarrageAssetsSchema::RunTest(const FString&)
     {
         TestTrue(TEXT("Positive life"), Profile->Lifetime > 0);
         TestTrue(TEXT("Positive speed"), Profile->Speed > 0);
-        TestEqual(TEXT("Ring preset"), Pattern->Settings.Preset, EBarragePatternPreset::RadialRing);
+        TestEqual(TEXT("New Layer uses Ring generator"), UBarragePattern::CreateDefaultLayer().FormationBlocks[0].Geometry.Formation, EBarrageFormation::Ring);
         TestEqual(TEXT("Sequence initially empty"), Sequence->Entries.Num(), 0);
     }
     return true;
@@ -285,4 +285,81 @@ bool FBarragePerformanceCore::RunTest(const FString&)
     TestEqual(TEXT("Still 10k alive"), Sim.Num(), 10000);
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBarrageStationaryTimedRelease,
+    "Barrage.Simulation.StationaryReleaseAfterAge", BarrageTests::Flags)
+bool FBarrageStationaryTimedRelease::RunTest(const FString&)
+{
+    FBarrageSimulation Sim;
+    FBarrageSpawnParams Params = BarrageTests::DefaultParams();
+    Params.Position = FVector::ZeroVector;
+    Params.Velocity = FVector::ZeroVector;
+    Params.GravityMode = EBarrageGravityMode::None;
+    Params.StationaryReleaseAgeSeconds = 0.25f;
+    Params.ReleaseVelocity = FVector(100, 0, 0);
+    Params.ReleaseGravityMode = EBarrageGravityMode::Constant;
+    Params.ConstantAcceleration = FVector(0, 0, -10);
+    const FBarrageProjectileHandle Handle = Sim.Spawn(Params);
+    if (!TestTrue(TEXT("Spawn release shot"), Handle.IsSet())) return false;
+    Sim.Step(0.5f, FVector::ZeroVector, BarrageTests::NoGravity);
+    FBarrageProjectileSnapshot Snapshot;
+    if (!TestTrue(TEXT("Survives release"), Sim.GetSnapshot(Handle, Snapshot))) return false;
+    TestTrue(TEXT("Holds for 0.25 then flies for 0.25"), Snapshot.Position.Equals(FVector(25,0,-0.3125),0.001));
+    TestTrue(TEXT("Profile gravity resumes"), Snapshot.Velocity.Equals(FVector(100,0,-2.5),0.001));
+    Params.StationaryReleaseAgeSeconds = 0.0f;
+    FBarrageSimulation Forever;
+    const auto ForeverHandle = Forever.Spawn(Params);
+    Forever.Step(0.5f, FVector(0,0,-980), BarrageTests::NoGravity);
+    TestTrue(TEXT("Zero release age remains stationary"), Forever.GetSnapshot(ForeverHandle,Snapshot));
+    TestTrue(TEXT("No velocity or gravity while stationary"), Snapshot.Position.IsNearlyZero());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBarrageRemovalSnapshots,
+    "Barrage.Simulation.RemovalSnapshotBeforeSwap", BarrageTests::Flags)
+bool FBarrageRemovalSnapshots::RunTest(const FString&)
+{
+    FBarrageSimulation Sim;
+    FBarrageSpawnParams P = BarrageTests::DefaultParams();
+    P.Position=FVector::ZeroVector;
+    P.Velocity=FVector(10,0,0);
+    P.Lifetime=0.5f;
+    const auto Handle=Sim.Spawn(P);
+    TArray<FBarrageRemovalRecord> Removed;
+    Sim.Step(0.5f,FVector::ZeroVector,BarrageTests::NoGravity,nullptr,
+        FBarrageSimulation::FCollisionSampler(),nullptr,&Removed);
+    if(!TestEqual(TEXT("One removal"),Removed.Num(),1))return false;
+    TestEqual(TEXT("Natural expiration"),Removed[0].Reason,EBarrageRemovalReason::Expired);
+    TestEqual(TEXT("Stable slot"),Removed[0].Handle.Slot,Handle.Slot);
+    TestEqual(TEXT("Stable generation"),Removed[0].Handle.Generation,Handle.Generation);
+    TestTrue(TEXT("Final position captured"),Removed[0].Position.Equals(FVector(5,0,0),0.001));
+    TestEqual(TEXT("Projectile removed"),Sim.Num(),0);
+
+    P.Lifetime=2.0f;P.CollisionMode=EBarrageCollisionMode::Destroy;
+    const auto HitHandle=Sim.Spawn(P);
+    TArray<FBarrageImpactRecord> Impacts;
+    Removed.Reset();
+    const FBarrageSimulation::FCollisionSampler Collision=[](const FBarrageCollisionQuery&,FBarrageCollisionHit& Hit)
+    { Hit.Time=0.5f;Hit.Location=FVector(5,0,0);Hit.Normal=FVector(-1,0,0);return true; };
+    Sim.Step(1.0f,FVector::ZeroVector,BarrageTests::NoGravity,&Impacts,Collision,nullptr,&Removed);
+    if(!TestEqual(TEXT("Collision removal"),Removed.Num(),1))return false;
+    TestEqual(TEXT("Collision reason"),Removed[0].Reason,EBarrageRemovalReason::Collision);
+    TestEqual(TEXT("Original handle still captured"),Removed[0].Handle.Slot,HitHandle.Slot);
+    TestTrue(TEXT("Contact position captured"),Removed[0].Position.Equals(FVector(5,0,0),0.001));
+    TestEqual(TEXT("Impact and removal independent"),Impacts.Num(),1);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBarrageInvalidRelease,
+    "Barrage.Simulation.InvalidReleaseRejected", BarrageTests::Flags)
+bool FBarrageInvalidRelease::RunTest(const FString&)
+{
+    FBarrageSimulation Sim;
+    auto P=BarrageTests::DefaultParams();P.StationaryReleaseAgeSeconds=-1.0f;
+    TestFalse(TEXT("Negative release age rejected"),Sim.Spawn(P).IsSet());
+    P.StationaryReleaseAgeSeconds=0.0f;
+    P.ReleaseVelocity.X=std::numeric_limits<double>::quiet_NaN();
+    TestFalse(TEXT("Invalid release velocity rejected"),Sim.Spawn(P).IsSet());
+    return true;
+}
+
 #endif

@@ -119,6 +119,15 @@ private:
     // UPROPERTY traversal keeps referenced Projectile Profiles alive while shots are queued.
     UPROPERTY(Transient) TArray<FBarrageActivePlayback> ActivePlaybacks;
     void AdvancePlaybacks(double DeltaSeconds);
+    void ProcessProjectileEvents(const TArray<FBarrageImpactRecord>& Impacts,
+        const TArray<FBarrageRemovalRecord>& Removals);
+    void ObserveSpawn(FBarrageActivePlayback& Playback, const FBarrageScheduledShot& Shot,
+        const FBarrageProjectileHandle& Handle, const FVector& Position);
+    void EnqueueEventShots(FBarrageActivePlayback& Playback, int32 RuleIndex, uint64& FiredRules,
+        const FVector& Origin);
+    FBarrageProjectileHandle SpawnPlaybackShot(FBarrageActivePlayback& Playback,
+        const FBarrageScheduledShot& Shot, const FVector& Position, const FVector& AnchorOffset);
+    TArray<FBarrageRemovalRecord> PendingExplicitRemovals;
     int32 QueuePlayback(FBarrageActivePlayback&& Playback, AActor* SourceActor,
         bool bIgnoreSourceForCollision, FBarragePlaybackHandle* OutHandle);
     int32 NextPlaybackId = 1;
@@ -128,6 +137,19 @@ private:
     void UpdateMeshBatches();
     UPROPERTY(Transient) TArray<FBarrageMeshBatch> MeshBatches;
     TArray<TArray<FTransform>> MeshTransformScratch;
+    // Last transforms submitted to ISM, in render-style order. Unchanged batches
+    // retain their GPU buffers (important for Stationary and paused formations).
+    TArray<TArray<FTransform>> LastSubmittedMeshTransforms;
+    double PerfLogElapsedSeconds = 0.0;
+    double PerfFrameCpuSumMs = 0.0;
+    double PerfSimulationCpuSumMs = 0.0;
+    double PerfSubmissionCpuSumMs = 0.0;
+    double PerfEventCpuSumMs = 0.0;
+    double PerfPlaybackCpuSumMs = 0.0;
+    int32 PerfPeakProjectiles = 0;
+    int32 PerfPeakObserved = 0;
+    int32 PerfPeakPending = 0;
+    int32 PerfLogSamples = 0;
     FBarrageSimulation Simulation;
     FBarrageSimulation::FGravitySampler GravitySampler;
     double AccumulatorSeconds = 0.0;

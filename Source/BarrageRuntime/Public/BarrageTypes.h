@@ -1,5 +1,6 @@
 #pragma once
 #include "CoreMinimal.h"
+#include <cfloat>
 #include "Engine/EngineTypes.h"
 
 #include "BarrageTypes.generated.h"
@@ -20,7 +21,8 @@ UENUM(BlueprintType)
 enum class EBarrageMotionMode : uint8
 {
     FreeFlight UMETA(DisplayName="Free Flight"),
-    PrescribedOrbit UMETA(DisplayName="Prescribed Orbit")
+    PrescribedOrbit UMETA(DisplayName="Prescribed Orbit"),
+    CurvedFlight UMETA(DisplayName="Curved Flight")
 };
 
 UENUM(BlueprintType)
@@ -49,6 +51,25 @@ struct BARRAGERUNTIME_API FBarrageProjectileHandle
     bool IsSet() const { return Slot != INDEX_NONE && Generation > 0; }
 };
 
+// Fixed-capacity compiled phase instructions. This is value data, with no per-shot
+// UObjects, virtual dispatch, dynamic allocation, or event graph evaluation.
+struct BARRAGERUNTIME_API FBarrageMotionPhase
+{
+    // End of this phase, measured as absolute projectile age. Last phase is unbounded.
+    float EndAgeSeconds = FLT_MAX;
+    EBarrageMotionMode Mode = EBarrageMotionMode::FreeFlight;
+    bool bStationary = false;
+    float TurnRateDegrees = 0.0f;
+    float SpeedMultiplier = 1.0f;
+    bool bIgnoreGravity = false;
+};
+struct BARRAGERUNTIME_API FBarrageMotionProgram
+{
+    static constexpr int32 MaxPhases = 6;
+    uint8 NumPhases = 0;
+    FBarrageMotionPhase Phases[MaxPhases];
+};
+
 USTRUCT(BlueprintType)
 struct BARRAGERUNTIME_API FBarrageSpawnParams
 {
@@ -72,6 +93,9 @@ struct BARRAGERUNTIME_API FBarrageSpawnParams
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Payload") TObjectPtr<AActor> SourceActor = nullptr;
     // Keep attribution/damage instigator independent of source collision suppression.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Collision") bool bIgnoreSourceActorForCollision = true;
+    // Compiled authored motion, bypassing the single-transition compatibility fields
+    // when nonempty. Stored inline to avoid per-projectile heap allocation.
+    FBarrageMotionProgram MotionProgram;
     // Internal render batch ID. Zero means no mesh renderer; not authorable in Details.
     int32 RenderStyleId = 0;
     float RenderScale = 1.0f;
@@ -80,6 +104,29 @@ struct BARRAGERUNTIME_API FBarrageSpawnParams
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage") float OrbitDegreesPerSecond = 0.0f;
     // Zero means orbit indefinitely, until destroyed. Positive values release into tangential flight.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage", meta=(ClampMin="0")) float OrbitReleaseAgeSeconds = 0.0f;
+    // Group Orbit is an analytic shared kinematic frame. Each member carries a value
+    // reference to the same center, axis, speed and clock; no Actor or UObject per bullet.
+    // GroupClockOffset allows staggered emissions to join a moving formation.
+    bool bGroupOrbit = false;
+    FVector GroupCenter = FVector::ZeroVector;
+    FVector GroupTravelVelocity = FVector::ZeroVector;
+    float GroupTurnRateDegrees = 0.0f;
+    float GroupReleaseSeconds = 0.0f;
+    float GroupClockOffsetSeconds = 0.0f;
+    int32 GroupIdentity = INDEX_NONE;
+    // Optional one-shot movement phase: hold position, then release into profile flight.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Movement", meta=(ClampMin="0")) float StationaryReleaseAgeSeconds = 0.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Movement") FVector ReleaseVelocity = FVector::ZeroVector;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Movement") EBarrageGravityMode ReleaseGravityMode = EBarrageGravityMode::None;
+    // One age-triggered transition, independent of legacy Stationary Release.
+    // TransitionAgeSeconds=0 disables. Source movement modes remain valid on all
+    // ordinary projectiles; no UObject or Blueprint tick is introduced.
+    float TransitionAgeSeconds = 0.0f;
+    EBarrageMotionMode TransitionMotion = EBarrageMotionMode::FreeFlight;
+    bool bTransitionToStationary = false;
+    float TransitionTurnRateDegrees = 0.0f;
+    FVector TransitionLaunchVelocity = FVector::ZeroVector;
+    EBarrageGravityMode TransitionGravityMode = EBarrageGravityMode::None;
 };
 
 // Identifies one scheduled Pattern or Sequence; does not own already-spawned projectiles.
@@ -98,12 +145,21 @@ struct BARRAGERUNTIME_API FBarrageFrameStats
     GENERATED_BODY()
     UPROPERTY(BlueprintReadOnly, Category="Barrage|Diagnostics") int32 ActiveProjectiles = 0;
     UPROPERTY(BlueprintReadOnly, Category="Barrage|Diagnostics") int32 ActivePlaybacks = 0;
+    // Active event watchers and queued children; useful when chains reach thousands of projectiles.
+    UPROPERTY(BlueprintReadOnly, Category="Barrage|Diagnostics") int32 ObservedProjectiles = 0;
+    UPROPERTY(BlueprintReadOnly, Category="Barrage|Diagnostics") int32 PendingEventShots = 0;
     UPROPERTY(BlueprintReadOnly, Category="Barrage|Diagnostics") int32 SimulationSteps = 0;
     UPROPERTY(BlueprintReadOnly, Category="Barrage|Diagnostics") int32 CollisionQueries = 0;
     UPROPERTY(BlueprintReadOnly, Category="Barrage|Diagnostics") int32 CollisionHits = 0;
     UPROPERTY(BlueprintReadOnly, Category="Barrage|Diagnostics") int32 ImpactEvents = 0;
     UPROPERTY(BlueprintReadOnly, Category="Barrage|Diagnostics") int32 RenderedInstances = 0;
     UPROPERTY(BlueprintReadOnly, Category="Barrage|Diagnostics") int32 RenderBatches = 0;
+    // CPU-side mesh uploads; unchanged stable batches are skipped. Not GPU timings.
+    UPROPERTY(BlueprintReadOnly, Category="Barrage|Diagnostics") int32 UploadedRenderBatches = 0;
+    UPROPERTY(BlueprintReadOnly, Category="Barrage|Diagnostics") int32 RebuiltRenderBatches = 0;
+    UPROPERTY(BlueprintReadOnly, Category="Barrage|Diagnostics") int32 SkippedRenderBatches = 0;
+    UPROPERTY(BlueprintReadOnly, Category="Barrage|Diagnostics") float EventProcessingMilliseconds = 0.0f;
+    UPROPERTY(BlueprintReadOnly, Category="Barrage|Diagnostics") float PlaybackMilliseconds = 0.0f;
     UPROPERTY(BlueprintReadOnly, Category="Barrage|Diagnostics") float SimulationMilliseconds = 0.0f;
     UPROPERTY(BlueprintReadOnly, Category="Barrage|Diagnostics") float RenderingMilliseconds = 0.0f;
     UPROPERTY(BlueprintReadOnly, Category="Barrage|Diagnostics") float FrameMilliseconds = 0.0f;

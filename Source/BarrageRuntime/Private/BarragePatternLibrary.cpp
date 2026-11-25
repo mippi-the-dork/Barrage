@@ -1,5 +1,6 @@
 #include "BarragePatternLibrary.h"
 #include "Math/RandomStream.h"
+#include <cmath>
 
 namespace
 {
@@ -31,9 +32,40 @@ const TCHAR* FBarragePatternLibrary::GetPresetName(EBarragePatternPreset Preset)
     return Index >= 0 && Index < UE_ARRAY_COUNT(Names) ? Names[Index] : TEXT("Unknown");
 }
 
+double FBarragePatternLibrary::EstimateEmissionCount(const FBarragePatternSettings& S)
+{
+    if (S.bComposable) return EstimateComposableCount(S);
+    if (S.Count <= 0 || S.Rows <= 0 || S.Columns <= 0 || S.Depth <= 0 || S.Arms <= 0 || S.Waves <= 0 ||
+        S.Petals < 1 || S.Petals > 32 || !FMath::IsFinite(S.GapFraction) ||
+        S.GapFraction < 0.0f || S.GapFraction > 1.0f)
+        return -1.0;
+    const double Count = double(S.Count);
+    switch (S.Preset)
+    {
+    case EBarragePatternPreset::Star:
+    case EBarragePatternPreset::MultiArmSpiral:
+    case EBarragePatternPreset::Helix: return Count * double(S.Arms);
+    case EBarragePatternPreset::Grid: return double(S.Rows) * double(S.Columns) * double(S.Depth);
+    case EBarragePatternPreset::WaveCurtain: return double(S.Rows) * double(S.Columns);
+    case EBarragePatternPreset::Checkerboard:
+        return std::ceil(double(S.Rows) * double(S.Columns) * 0.5);
+    case EBarragePatternPreset::RotatingRing: return Count * double(S.Waves);
+    case EBarragePatternPreset::Pincer: return Count * 2.0;
+    case EBarragePatternPreset::SafeGap:
+        // A strict exclusion around 0 degrees. Shots at the exact edges survive.
+        // Count is an angular sample budget here, not the final number of shots.
+        if (S.GapFraction <= 0.0f) return Count;
+        return FMath::Max(0.0, Count - (2.0 * std::ceil(
+            Count * (double(S.GapFraction) * 0.5)) - 1.0));
+    case EBarragePatternPreset::SplitBloom: return Count + 1.0;
+    default: return Count;
+    }
+}
+
 bool FBarragePatternLibrary::Generate(const FBarragePatternSettings& S, TArray<FBarragePatternEmission>& Out,
     int32 MaxEmissions, bool bHasTarget, FVector LocalTarget)
 {
+    if (S.bComposable) return GenerateComposable(S, Out, MaxEmissions, bHasTarget, LocalTarget);
     Out.Reset();
     if (S.Count <= 0 || S.Rows <= 0 || S.Columns <= 0 || S.Depth <= 0 || S.Arms <= 0 || S.Waves <= 0 ||
         MaxEmissions <= 0 || MaxEmissions > 1000000 ||
@@ -43,25 +75,13 @@ bool FBarragePatternLibrary::Generate(const FBarragePatternSettings& S, TArray<F
         !Finite(S.Amplitude) || !Finite(S.Frequency) || !Finite(S.GapFraction) || !Finite(S.ConeAngleDegrees) ||
         S.Radius < 0 || S.InnerRadius < 0 || S.Width < 0 || S.Height < 0 || S.Length < 0 ||
         S.IntervalSeconds < 0 || S.DelaySeconds < 0 || S.GapFraction < 0 || S.GapFraction > 1 ||
-        S.ConeAngleDegrees < 0 || S.ConeAngleDegrees > 179 || LocalTarget.ContainsNaN()) return false;
+        S.ConeAngleDegrees < 0 || S.ConeAngleDegrees > 179 ||
+        S.Petals < 1 || S.Petals > 32 || LocalTarget.ContainsNaN()) return false;
 
     // Never silently reduce the author's requested spawn count. Preflight the emission
     // budget before entering any loop; all products are evaluated as doubles to avoid
     // integer overflow on malicious or accidental extreme settings.
-    double Expected = S.Count;
-    switch (S.Preset)
-    {
-        case EBarragePatternPreset::Star:
-        case EBarragePatternPreset::MultiArmSpiral:
-        case EBarragePatternPreset::Helix: Expected *= double(S.Arms); break;
-        case EBarragePatternPreset::Grid: Expected = double(S.Rows) * S.Columns * S.Depth; break;
-        case EBarragePatternPreset::WaveCurtain: Expected = double(S.Rows) * S.Columns; break;
-        case EBarragePatternPreset::Checkerboard: Expected = ((double(S.Rows) * S.Columns + ((S.Rows & 1) && (S.Columns & 1) ? 1.0 : 0.0)) * 0.5); break;
-        case EBarragePatternPreset::RotatingRing: Expected *= double(S.Waves); break;
-        case EBarragePatternPreset::Pincer: Expected *= 2.0; break;
-        case EBarragePatternPreset::SplitBloom: Expected += 1.0; break;
-        default: break;
-    }
+    const double Expected = EstimateEmissionCount(S);
     if (Expected > MaxEmissions) return false;
     const int32 N = S.Count;
     const int32 Rows = S.Rows;
@@ -79,7 +99,7 @@ bool FBarragePatternLibrary::Generate(const FBarragePatternSettings& S, TArray<F
     {
         if (Out.Num() >= MaxEmissions || Position.ContainsNaN() || Direction.ContainsNaN() ||
             !FMath::IsFinite(Time) || Time < 0 || Time > 86400.0) return false;
-        if (S.bAimAtTarget && bHasTarget && Anchor == INDEX_NONE)
+        if (S.bAimAtTarget && bHasTarget && Anchor == INDEX_NONE && !bOrbit)
         {
             Direction = (LocalTarget - Position).GetSafeNormal(UE_SMALL_NUMBER, Direction.GetSafeNormal(UE_SMALL_NUMBER, FVector::ForwardVector));
         }
@@ -203,11 +223,18 @@ bool FBarragePatternLibrary::Generate(const FBarragePatternSettings& S, TArray<F
                     Lateral(J, Rows, S.Height)), Radial(Base), J * double(S.IntervalSeconds))) return false;
         break;
     case EBarragePatternPreset::Rose:
+        // A signed r=cos(Petals*theta) rose traces two petals per even parameter
+        // and retraces an odd-petal rose twice. Use a non-negative radial envelope
+        // instead: |cos(Petals*theta/2)| has exactly Petals lobes in [0, 2pi).
+        // Count now means total shots, never shots per lobe or duplicated samples.
         for (int32 I = 0; I < N; ++I)
         {
-            const double A = Base + Tau * double(I) / N;
-            const FVector P = Radial(A) * (S.Radius * FMath::Cos(S.Petals * A));
-            if (!Emit(P, S.bInward ? -P : P, 0)) return false;
+            // A fractional sample offset avoids multiple shots at exactly the
+            // center of the flower when Count is a multiple of Petals.
+            const double Theta = Tau * (double(I) + 0.3819660112501051) / double(N);
+            const double Radius = double(S.Radius) * FMath::Abs(FMath::Cos(0.5 * S.Petals * Theta));
+            const FVector Direction = Radial(Base + Theta);
+            if (!Emit(Direction * Radius, S.bInward ? -Direction : Direction, 0)) return false;
         }
         break;
     case EBarragePatternPreset::OrbitalHalo:

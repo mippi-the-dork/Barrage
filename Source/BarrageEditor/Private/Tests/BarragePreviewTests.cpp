@@ -1,6 +1,8 @@
+#include "BarrageTestPatternUtils.h"
 #include "Misc/AutomationTest.h"
 #include "BarragePatternPreviewModel.h"
 #include "BarrageAssets.h"
+#include "BarrageAuthoringInteraction.h"
 #include <limits>
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -12,7 +14,9 @@ namespace BarragePreviewTests
         OutProfile = NewObject<UBarrageProjectileProfile>(GetTransientPackage());
         UBarragePattern* Pattern = NewObject<UBarragePattern>(GetTransientPackage());
         Pattern->Projectile = OutProfile;
-        Pattern->Settings.Preset = Preset;
+        Pattern->InitializeNewPattern();
+        Pattern->Layers[0].Settings.Preset = Preset;
+        Pattern->Layers[0].Settings.bComposable = false;
         return Pattern;
     }
 }
@@ -22,11 +26,11 @@ bool FBarragePreviewMatchesCompiler::RunTest(const FString&)
 {
     UBarrageProjectileProfile* Profile = nullptr;
     UBarragePattern* Pattern = BarragePreviewTests::MakePattern(EBarragePatternPreset::Spiral, Profile);
-    Pattern->Settings.Count = 30;
+    Pattern->Layers[0].Settings.Count = 30;
     FBarragePatternPreviewModel Model;
-    TestTrue(TEXT("Preview compiled"), Model.Rebuild(Pattern));
+    TestTrue(TEXT("Preview compiled"), BarrageTestPattern::Rebuild(Model, Pattern));
     FBarrageActivePlayback Playback;
-    TestTrue(TEXT("Runtime compiler compiled"), FBarragePatternCompiler::CompilePattern(Pattern, FTransform::Identity, false, FVector::ZeroVector, Playback));
+    TestTrue(TEXT("Runtime compiler compiled"), BarrageTestPattern::CompilePattern(Pattern, FTransform::Identity, false, FVector::ZeroVector, Playback));
     TestEqual(TEXT("Same shot count"), Model.GetCount(), Playback.Shots.Num());
     for (int32 I = 0; I < Model.GetCount(); ++I)
     {
@@ -42,10 +46,10 @@ bool FBarragePreviewTimeline::RunTest(const FString&)
 {
     UBarrageProjectileProfile* Profile = nullptr;
     UBarragePattern* Pattern = BarragePreviewTests::MakePattern(EBarragePatternPreset::Burst, Profile);
-    Pattern->Settings.Count = 8;
-    Pattern->Settings.IntervalSeconds = 0.25f;
+    Pattern->Layers[0].Settings.Count = 8;
+    Pattern->Layers[0].Settings.IntervalSeconds = 0.25f;
     FBarragePatternPreviewModel Model;
-    TestTrue(TEXT("Compiled"), Model.Rebuild(Pattern));
+    TestTrue(TEXT("Compiled"), BarrageTestPattern::Rebuild(Model, Pattern));
     TestEqual(TEXT("No shots before first"), Model.CountThrough(-0.01), 0);
     TestEqual(TEXT("First shot at t=0"), Model.CountThrough(0.0), 1);
     TestEqual(TEXT("Third shot at t=0.5"), Model.CountThrough(0.5), 3);
@@ -59,14 +63,14 @@ bool FBarragePreviewLayers::RunTest(const FString&)
 {
     UBarrageProjectileProfile* Profile = nullptr;
     UBarragePattern* Pattern = BarragePreviewTests::MakePattern(EBarragePatternPreset::Directed, Profile);
-    Pattern->Settings.Count = 1;
+    Pattern->Layers[0].Settings.Count = 1;
     FBarragePatternLayer& Layer = Pattern->Layers.AddDefaulted_GetRef();
     Layer.Settings.Preset = EBarragePatternPreset::Directed;
     Layer.Settings.Count = 1;
     Layer.LocalTransform.SetTranslation(FVector(0, 200, 0));
     Layer.StartDelaySeconds = 2.0f;
     FBarragePatternPreviewModel Model;
-    TestTrue(TEXT("Compiled"), Model.Rebuild(Pattern));
+    TestTrue(TEXT("Compiled"), BarrageTestPattern::Rebuild(Model, Pattern));
     TestEqual(TEXT("Root and layer"), Model.GetCount(), 2);
     TestTrue(TEXT("Layer translated"), Model.GetPoints()[1].Position.Equals(FVector(0, 200, 0), 0.001));
     TestTrue(TEXT("Layer delayed"), FMath::IsNearlyEqual(Model.GetPoints()[1].FireTime, 2.0, 0.001));
@@ -77,9 +81,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBarragePreviewSplit, "Barrage.Editor.Preview.S
 bool FBarragePreviewSplit::RunTest(const FString&)
 {
     UBarrageProjectileProfile* Profile = nullptr;
-    UBarragePattern* Pattern = BarragePreviewTests::MakePattern(EBarragePatternPreset::SplitBloom, Profile);
+    UBarragePattern* Pattern = BarragePreviewTests::MakePattern(EBarragePatternPreset::Directed, Profile);
+    Pattern->Layers.Reset();
+    if (!TestEqual(TEXT("Built-in Split Bloom inserts parent and children"),
+        FBarrageAuthoringInteraction::InsertLayerAbove(Pattern, INDEX_NONE, EBarragePatternPreset::SplitBloom), 0)) return false;
     FBarragePatternPreviewModel Model;
-    TestTrue(TEXT("Compiled"), Model.Rebuild(Pattern));
+    TestTrue(TEXT("Compiled"), BarrageTestPattern::Rebuild(Model, Pattern));
     bool bFoundChild = false;
     for (const FBarragePreviewPoint& Point : Model.GetPoints())
     {
@@ -99,10 +106,17 @@ bool FBarragePreviewInvalid::RunTest(const FString&)
     UBarrageProjectileProfile* Profile = nullptr;
     UBarragePattern* Pattern = BarragePreviewTests::MakePattern(EBarragePatternPreset::Fan, Profile);
     FBarragePatternPreviewModel Model;
-    TestTrue(TEXT("Valid first"), Model.Rebuild(Pattern));
-    TestFalse(TEXT("Null rejected"), Model.Rebuild(nullptr));
-    TestEqual(TEXT("Clears old data"), Model.GetCount(), 0);
-    TestFalse(TEXT("Zero budget rejected"), Model.Rebuild(Pattern, 0));
+    if (!TestTrue(TEXT("Valid first"), BarrageTestPattern::Rebuild(Model, Pattern))) return false;
+    TestTrue(TEXT("Preview contains old shots before invalidation"), Model.GetCount() > 0);
+    TestFalse(TEXT("Null rejected through test fixture"), BarrageTestPattern::Rebuild(Model, nullptr));
+    TestEqual(TEXT("Invalid input clears previous fixture preview"), Model.GetCount(), 0);
+    TestTrue(TEXT("Invalid input has diagnostic"), !Model.GetMessage().IsEmpty());
+    if (!TestTrue(TEXT("Valid again"), BarrageTestPattern::Rebuild(Model, Pattern))) return false;
+    TestTrue(TEXT("Rebuilt shots are present"), Model.GetCount() > 0);
+    TestFalse(TEXT("Production preview rejects null directly"), Model.Rebuild(nullptr));
+    TestEqual(TEXT("Production preview also resets old shots"), Model.GetCount(), 0);
+    TestFalse(TEXT("Zero budget rejected"), BarrageTestPattern::Rebuild(Model, Pattern, 0));
+    TestEqual(TEXT("Zero budget retains no shots"), Model.GetCount(), 0);
     TestTrue(TEXT("Error message retained"), !Model.GetMessage().IsEmpty());
     return true;
 }
@@ -112,11 +126,11 @@ bool FBarragePreviewBudget::RunTest(const FString&)
 {
     UBarrageProjectileProfile* Profile = nullptr;
     UBarragePattern* Pattern = BarragePreviewTests::MakePattern(EBarragePatternPreset::RadialRing, Profile);
-    Pattern->Settings.Count = 256;
+    Pattern->Layers[0].Settings.Count = 256;
     FBarragePatternPreviewModel Model;
-    TestFalse(TEXT("Over budget rejected"), Model.Rebuild(Pattern, 32));
+    TestFalse(TEXT("Over budget rejected"), BarrageTestPattern::Rebuild(Model, Pattern, 32));
     TestEqual(TEXT("No partial data"), Model.GetCount(), 0);
-    TestTrue(TEXT("Valid budget works"), Model.Rebuild(Pattern, 512));
+    TestTrue(TEXT("Valid budget works"), BarrageTestPattern::Rebuild(Model, Pattern, 512));
     TestEqual(TEXT("All emissions"), Model.GetCount(), 256);
     return true;
 }

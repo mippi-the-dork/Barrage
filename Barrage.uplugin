@@ -1,9 +1,9 @@
 {
   "FileVersion": 3,
-  "Version": 11,
-  "VersionName": "0.1.0-dev11",
+  "Version": 43,
+  "VersionName": "0.4.0-dev43",
   "FriendlyName": "Barrage",
-  "Description": "Data-oriented bullet hell projectile simulation, patterns, and attack sequencing.",
+  "Description": "Block-first high-density projectile pattern authoring and CPU simulation.",
   "Category": "Gameplay",
   "CreatedBy": "Mippi the Dork",
   "CanContainContent": true,

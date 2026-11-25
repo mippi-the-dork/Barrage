@@ -36,6 +36,19 @@ struct BARRAGERUNTIME_API FBarrageImpactRecord
     float PointDamage = 0.0f;
 };
 
+enum class EBarrageRemovalReason : uint8 { Expired, Collision, Explicit, Invalid };
+
+// Captured before swap removal so destroyed projectiles still have a valid
+// location/velocity for dependent layer activation. No UObject reference needed.
+struct BARRAGERUNTIME_API FBarrageRemovalRecord
+{
+    FBarrageProjectileHandle Handle;
+    FVector Position = FVector::ZeroVector;
+    FVector Velocity = FVector::ZeroVector;
+    float Age = 0.0f;
+    EBarrageRemovalReason Reason = EBarrageRemovalReason::Invalid;
+};
+
 // Optional per-step counters; recording them never requires querying a UWorld.
 struct BARRAGERUNTIME_API FBarrageStepMetrics
 {
@@ -59,7 +72,9 @@ public:
     bool GetSnapshot(const FBarrageProjectileHandle& Handle, FBarrageProjectileSnapshot& OutSnapshot) const;
     void Step(float StepSeconds, const FVector& WorldAcceleration, const FGravitySampler& ProviderSampler,
         TArray<FBarrageImpactRecord>* OutImpacts = nullptr, const FCollisionSampler& CollisionSampler = FCollisionSampler(),
-        FBarrageStepMetrics* OutMetrics = nullptr);
+        FBarrageStepMetrics* OutMetrics = nullptr, TArray<FBarrageRemovalRecord>* OutRemovals = nullptr);
+    // Constant angular rate around a fixed axis. Used by runtime and editor preview.
+    static FVector AdvanceCurvedFlight(const FVector& Velocity, const FVector& Axis, double RateDegrees, double Seconds, FVector& OutVelocity);
     void Clear();
     int32 Num() const { return Positions.Num(); }
     FVector GetPositionAt(int32 DenseIndex) const { return Positions.IsValidIndex(DenseIndex) ? Positions[DenseIndex] : FVector::ZeroVector; }
@@ -74,10 +89,36 @@ private:
     TArray<FVector> Accelerations;
     TArray<EBarrageGravityMode> Modes;
     TArray<EBarrageMotionMode> Motions;
+    struct FGroupOrbitMember
+    {
+        FVector InitialCenter = FVector::ZeroVector;
+        FVector TravelVelocity = FVector::ZeroVector;
+        FVector InitialOffset = FVector::ZeroVector;
+        float TurnRateDegrees = 0.0f;
+        float ReleaseSeconds = 0.0f;
+        float ClockOffsetSeconds = 0.0f;
+        int32 Identity = INDEX_NONE;
+        bool bActive = false;
+    };
+    TArray<FGroupOrbitMember> GroupMembers;
     TArray<FVector> OrbitCenters;
     TArray<FVector> OrbitAxes;
     TArray<float> OrbitRates;
     TArray<float> OrbitReleases;
+    TArray<float> ReleaseAges;
+    TArray<FVector> ReleaseVelocities;
+    TArray<EBarrageGravityMode> ReleaseGravityModes;
+    TArray<float> TransitionAges;
+    TArray<EBarrageMotionMode> TransitionMotions;
+    TArray<uint8> TransitionStationary;
+    TArray<float> TransitionTurnRates;
+    TArray<FVector> TransitionLaunchVelocities;
+    TArray<EBarrageGravityMode> TransitionGravityModes;
+    TArray<FBarrageMotionProgram> MotionPrograms;
+    TArray<uint8> MotionPhaseIndices;
+    TArray<FVector> MotionLaunchVelocities;
+    TArray<EBarrageGravityMode> MotionProfileGravity;
+    TArray<FVector> MotionProfileAcceleration;
     TArray<float> Ages;
     TArray<float> Lifetimes;
     TArray<EBarrageCollisionMode> CollisionModes;

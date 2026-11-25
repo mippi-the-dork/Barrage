@@ -1,3 +1,4 @@
+#include "BarrageTestPatternUtils.h"
 #include "Misc/AutomationTest.h"
 #include "BarrageEmitter.h"
 #include "BarrageEmitterComponent.h"
@@ -17,9 +18,12 @@ namespace BarrageIteration09Tests
         UBarrageProjectileProfile* Profile = NewObject<UBarrageProjectileProfile>(GetTransientPackage());
         UBarragePattern* Pattern = NewObject<UBarragePattern>(GetTransientPackage());
         Pattern->Projectile = Profile;
-        Pattern->Settings.Preset = EBarragePatternPreset::Burst;
-        Pattern->Settings.Count = 4;
-        Pattern->Settings.IntervalSeconds = 0.25f;
+        Pattern->InitializeNewPattern();
+        Pattern->Layers[0].Settings.Preset = EBarragePatternPreset::Burst;
+        Pattern->Layers[0].Settings.bComposable = false;
+        Pattern->Layers[0].Settings.Count = 4;
+        Pattern->Layers[0].Settings.IntervalSeconds = 0.25f;
+        BarrageTestPattern::Prepare(Pattern);
         return Pattern;
     }
     FBarrageSpawnParams Shot()
@@ -132,8 +136,10 @@ bool FBarrageI09PlaybackInstant::RunTest(const FString&)
 {
     UBarrageWorldSubsystem* S = NewObject<UBarrageWorldSubsystem>(GetTransientPackage());
     UBarragePattern* P = BarrageIteration09Tests::MakeTimedPattern();
-    P->Settings.Preset = EBarragePatternPreset::Directed;
-    P->Settings.Count = 1;
+    P->Layers[0].Settings.Preset = EBarragePatternPreset::Directed;
+    P->Layers[0].Settings.bComposable = false;
+    P->Layers[0].Settings.Count = 1;
+    BarrageTestPattern::Prepare(P);
     FBarragePlaybackHandle H = S->StartPatternTracked(P, FTransform::Identity, false, FVector::ZeroVector);
     TestTrue(TEXT("Valid handle was issued"), H.IsSet());
     TestFalse(TEXT("Instant pattern no longer scheduled"), S->IsPlaybackActive(H));

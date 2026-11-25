@@ -1,8 +1,12 @@
+#include "BarrageTestPatternUtils.h"
 #include "Misc/AutomationTest.h"
 #include "BarragePatternLibrary.h"
 #include "BarragePlayback.h"
 #include "BarrageSimulation.h"
 #include "BarrageAssets.h"
+#include "BarrageAuthoringInteraction.h"
+#include "BarrageFormationStack.h"
+#include "BarrageEmissionStack.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 namespace BarragePatternTests
@@ -29,48 +33,44 @@ namespace BarragePatternTests
 
     static bool VerifyPreset(FAutomationTestBase& Test, EBarragePatternPreset Preset)
     {
-        FBarragePatternSettings S;
-        S.Preset = Preset;
-        TArray<FBarragePatternEmission> A, B;
-        Test.TestTrue(TEXT("Generator succeeds"), FBarragePatternLibrary::Generate(S, A));
-        Test.TestEqual(TEXT("Expected projectile count"), A.Num(), DefaultCount(Preset));
-        Test.TestTrue(TEXT("Same seed succeeds"), FBarragePatternLibrary::Generate(S, B));
-        Test.TestEqual(TEXT("Repeat count"), A.Num(), B.Num());
-        for (int32 I = 0; I < A.Num(); ++I)
+        // Built-in presets must be fully expressible through Blocks. Compile the
+        // same configuration twice; verify deterministic count, transforms and time.
+        UBarragePattern* Pattern=NewObject<UBarragePattern>(GetTransientPackage());
+        Pattern->InitializeNewPattern();
+        Pattern->Layers.Reset();
+        Pattern->Projectile=NewObject<UBarrageProjectileProfile>(Pattern);
+        if (!Test.TestTrue(TEXT("Insert default preset as Blocks"),
+            FBarrageAuthoringInteraction::InsertLayerAbove(Pattern,INDEX_NONE,Preset)!=INDEX_NONE)) return false;
+        for(const FBarragePatternLayer& Layer:Pattern->Layers)
         {
-            const FBarragePatternEmission& E = A[I];
-            Test.TestFalse(TEXT("Finite position"), E.LocalPosition.ContainsNaN());
-            Test.TestFalse(TEXT("Finite direction"), E.LocalDirection.ContainsNaN());
-            Test.TestTrue(TEXT("Unit direction"), FMath::IsNearlyEqual(E.LocalDirection.SizeSquared(), 1.0, 0.001));
-            Test.TestTrue(TEXT("Non-negative finite time"), FMath::IsFinite(E.TimeSeconds) && E.TimeSeconds >= 0.0f);
-            if (B.IsValidIndex(I))
-            {
-                Test.TestTrue(TEXT("Deterministic position"), E.LocalPosition.Equals(B[I].LocalPosition, 0.00001));
-                Test.TestTrue(TEXT("Deterministic direction"), E.LocalDirection.Equals(B[I].LocalDirection, 0.00001));
-                Test.TestEqual(TEXT("Deterministic fire time"), E.TimeSeconds, B[I].TimeSeconds);
-            }
+            if (!Test.TestTrue(TEXT("Formation validates"),FBarrageFormationStackCompiler::Validate(Layer))) return false;
+            if (!Test.TestTrue(TEXT("Emission validates"),FBarrageEmissionStackCompiler::Validate(Layer))) return false;
         }
-        const FQuat Rotation(FVector(0.3, 0.8, 0.5).GetSafeNormal(), FMath::DegreesToRadians(70.0));
-        const FTransform Transform(Rotation, FVector(200, -50, 100));
-        UBarrageProjectileProfile* Profile = NewObject<UBarrageProjectileProfile>(GetTransientPackage());
-        UBarragePattern* Pattern = NewObject<UBarragePattern>(GetTransientPackage());
-        Pattern->Projectile = Profile;
-        Pattern->Settings = S;
-        FBarrageActivePlayback Playback;
-        Test.TestTrue(TEXT("Compile pattern"), FBarragePatternCompiler::CompilePattern(Pattern, Transform, false, FVector::ZeroVector, Playback));
-        Test.TestEqual(TEXT("Compiled count"), Playback.Shots.Num(), A.Num());
-        for (int32 I = 0; I < Playback.Shots.Num(); ++I)
+        const FQuat Rotation(FVector(0.3,0.8,0.5).GetSafeNormal(),FMath::DegreesToRadians(70.0));
+        const FTransform Transform(Rotation,FVector(200,-50,100));
+        FBarrageActivePlayback A,B;
+        if(!Test.TestTrue(TEXT("Block compiler creates schedule"),
+            FBarragePatternCompiler::CompilePattern(Pattern,Transform,false,FVector::ZeroVector,A)))return false;
+        if(!Test.TestTrue(TEXT("Block compiler repeat"),
+            FBarragePatternCompiler::CompilePattern(Pattern,Transform,false,FVector::ZeroVector,B)))return false;
+        if(!Test.TestTrue(TEXT("Nonempty formation"),!A.Shots.IsEmpty())) return false;
+        if(!Test.TestEqual(TEXT("Deterministic shot count"),A.Shots.Num(),B.Shots.Num())) return false;
+        for(int32 I=0;I<A.Shots.Num();++I)
         {
-            const FBarrageScheduledShot& Shot = Playback.Shots[I];
-            Test.TestTrue(TEXT("Monotonic timestamps"), I == 0 || Shot.FireTime >= Playback.Shots[I - 1].FireTime);
-            // Compiler sorts by time. OriginalOrdinal relates back to our unsorted generator.
-            const FBarragePatternEmission& Reference = A[Shot.OriginalOrdinal];
-            if (Reference.AnchorIndex == INDEX_NONE)
-                Test.TestTrue(TEXT("Transform preserves local geometry"), Shot.WorldPosition.Equals(Transform.TransformPosition(Reference.LocalPosition), 0.0001));
-            Test.TestTrue(TEXT("Transform preserves direction"), Shot.WorldDirection.Equals(Rotation.RotateVector(Reference.LocalDirection), 0.0001));
+            const FBarrageScheduledShot& Shot=A.Shots[I];
+            const FBarrageScheduledShot& Same=B.Shots[I];
+            Test.TestTrue(TEXT("Finite position"),!Shot.WorldPosition.ContainsNaN());
+            Test.TestTrue(TEXT("Finite direction"),!Shot.WorldDirection.ContainsNaN());
+            Test.TestTrue(TEXT("Unit direction"),FMath::IsNearlyEqual(Shot.WorldDirection.SizeSquared(),1.0,0.001));
+            Test.TestTrue(TEXT("Finite nonnegative time"),FMath::IsFinite(Shot.FireTime)&&Shot.FireTime>=0.0);
+            Test.TestTrue(TEXT("Timestamps sorted"),I==0 || Shot.FireTime>=A.Shots[I-1].FireTime);
+            Test.TestTrue(TEXT("Deterministic position"),Shot.WorldPosition.Equals(Same.WorldPosition,0.00001));
+            Test.TestTrue(TEXT("Deterministic direction"),Shot.WorldDirection.Equals(Same.WorldDirection,0.00001));
+            Test.TestEqual(TEXT("Deterministic time"),Shot.FireTime,Same.FireTime);
         }
         return true;
     }
+
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBarragePatternDirected, "Barrage.Patterns.Presets.Directed", BarragePatternTests::Flags)
@@ -282,8 +282,10 @@ bool FBarragePatternComposition::RunTest(const FString&)
     UBarrageProjectileProfile* Profile = NewObject<UBarrageProjectileProfile>(GetTransientPackage());
     UBarragePattern* Pattern = NewObject<UBarragePattern>(GetTransientPackage());
     Pattern->Projectile = Profile;
-    Pattern->Settings.Preset = EBarragePatternPreset::RadialRing;
-    Pattern->Settings.Count = 8;
+    Pattern->InitializeNewPattern();
+    Pattern->Layers[0].Settings.Preset = EBarragePatternPreset::RadialRing;
+    Pattern->Layers[0].Settings.bComposable = false;
+    Pattern->Layers[0].Settings.Count = 8;
     FBarragePatternLayer Layer;
     Layer.Settings.Preset = EBarragePatternPreset::Burst;
     Layer.Settings.Count = 4;
@@ -292,8 +294,8 @@ bool FBarragePatternComposition::RunTest(const FString&)
     Layer.LocalTransform.SetLocation(FVector(0, 0, 100));
     Pattern->Layers.Add(Layer);
     FBarrageActivePlayback P;
-    TestTrue(TEXT("Compile layer stack"), FBarragePatternCompiler::CompilePattern(Pattern, FTransform::Identity, false, FVector::ZeroVector, P));
-    TestEqual(TEXT("Root + layered count"), P.Shots.Num(), 12);
+    TestTrue(TEXT("Compile layer stack"), BarrageTestPattern::CompilePattern(Pattern, FTransform::Identity, false, FVector::ZeroVector, P));
+    TestEqual(TEXT("Two ordinary layers emit together"), P.Shots.Num(), 12);
     if (P.Shots.Num() == 12)
     {
         TestTrue(TEXT("Delayed layer starts at t=2"), FMath::IsNearlyEqual(P.Shots[8].FireTime, 2.0));
@@ -307,6 +309,7 @@ bool FBarragePatternComposition::RunTest(const FString&)
     Entry.RepeatCount = 3;
     Entry.RepeatIntervalSeconds = 5;
     Sequence->Entries.Add(Entry);
+    TestTrue(TEXT("Finalize transient block fixtures"), BarrageTestPattern::Prepare(Pattern));
     TestTrue(TEXT("Sequence compiles"), FBarragePatternCompiler::CompileSequence(Sequence, FTransform::Identity, false, FVector::ZeroVector, P));
     TestEqual(TEXT("Three complete repeats"), P.Shots.Num(), 36);
     if (P.Shots.Num() == 36)
@@ -361,22 +364,51 @@ bool FBarragePatternOrbit::RunTest(const FString&)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBarrageOrbitWithinStepRelease,
+    "Barrage.Patterns.Temporal.OrbitExactWithinStepRelease", BarragePatternTests::Flags)
+bool FBarrageOrbitWithinStepRelease::RunTest(const FString&)
+{
+    FBarrageSpawnParams P;
+    P.Position=FVector(100,0,0);
+    P.Lifetime=5.0f;
+    P.MotionMode=EBarrageMotionMode::PrescribedOrbit;
+    P.OrbitCenter=FVector::ZeroVector;
+    P.OrbitAxis=FVector::UpVector;
+    P.OrbitDegreesPerSecond=90.0f;
+    P.OrbitReleaseAgeSeconds=0.75f;
+    P.GravityMode=EBarrageGravityMode::None;
+    FBarrageSimulation Large,Split;
+    const FBarrageProjectileHandle A=Large.Spawn(P),B=Split.Spawn(P);
+    if(!TestTrue(TEXT("Both valid"),A.IsSet() && B.IsSet()))return false;
+    Large.Step(1.0f,FVector::ZeroVector,FBarrageSimulation::FGravitySampler());
+    Split.Step(0.75f,FVector::ZeroVector,FBarrageSimulation::FGravitySampler());
+    Split.Step(0.25f,FVector::ZeroVector,FBarrageSimulation::FGravitySampler());
+    FBarrageProjectileSnapshot One,Two;
+    if(!TestTrue(TEXT("Large snapshot"),Large.GetSnapshot(A,One)) ||
+       !TestTrue(TEXT("Split snapshot"),Split.GetSnapshot(B,Two)))return false;
+    TestTrue(TEXT("Release independent of step segmentation"),One.Position.Equals(Two.Position,0.01));
+    TestTrue(TEXT("Release preserves tangential velocity"),One.Velocity.Equals(Two.Velocity,0.01));
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBarragePatternTarget, "Barrage.Patterns.Targeting.AimSnapshot", BarragePatternTests::Flags)
 bool FBarragePatternTarget::RunTest(const FString&)
 {
     UBarrageProjectileProfile* Profile = NewObject<UBarrageProjectileProfile>(GetTransientPackage());
     UBarragePattern* Pattern = NewObject<UBarragePattern>(GetTransientPackage());
     Pattern->Projectile = Profile;
-    Pattern->Settings.Preset = EBarragePatternPreset::Directed;
-    Pattern->Settings.Count = 1;
-    Pattern->Settings.bAimAtTarget = true;
+    Pattern->InitializeNewPattern();
+    Pattern->Layers[0].Settings.Preset = EBarragePatternPreset::Directed;
+    Pattern->Layers[0].Settings.bComposable = false;
+    Pattern->Layers[0].Settings.Count = 1;
+    Pattern->Layers[0].Settings.bAimAtTarget = true;
     FBarrageActivePlayback Playback;
     const FTransform Transform(FQuat::Identity, FVector(100,0,0));
-    TestTrue(TEXT("Aimed compile"), FBarragePatternCompiler::CompilePattern(Pattern, Transform, true, FVector(100,100,0), Playback));
+    TestTrue(TEXT("Aimed compile"), BarrageTestPattern::CompilePattern(Pattern, Transform, true, FVector(100,100,0), Playback));
     if (Playback.Shots.Num() == 1)
         TestTrue(TEXT("Aims in world +Y"), Playback.Shots[0].WorldDirection.Equals(FVector(0,1,0), 0.001));
     // Aim-at-source must fall back to the authored forward direction instead of producing a zero vector.
-    TestTrue(TEXT("Coincident target compiles"), FBarragePatternCompiler::CompilePattern(Pattern, Transform, true, Transform.GetLocation(), Playback));
+    TestTrue(TEXT("Coincident target compiles"), BarrageTestPattern::CompilePattern(Pattern, Transform, true, Transform.GetLocation(), Playback));
     if (Playback.Shots.Num() == 1)
         TestTrue(TEXT("Coincident target retains default forward"), Playback.Shots[0].WorldDirection.Equals(FVector::ForwardVector, 0.001));
     return true;

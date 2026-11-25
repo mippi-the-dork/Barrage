@@ -3,6 +3,8 @@
 #include "Factories/Factory.h"
 #include "BarrageAssetFactories.generated.h"
 
+class UBarragePattern;
+
 UCLASS()
 class UBarrageProjectileProfileFactory : public UFactory
 {
@@ -27,5 +29,15 @@ class UBarrageSequenceFactory : public UFactory
     GENERATED_BODY()
 public:
     UBarrageSequenceFactory();
+    virtual UObject* FactoryCreateNew(UClass* Class, UObject* InParent, FName Name, EObjectFlags Flags, UObject* Context, FFeedbackContext* Warn) override;
+};
+
+UCLASS()
+class UBarragePresetFactory : public UFactory
+{
+    GENERATED_BODY()
+public:
+    UBarragePresetFactory();
+    UPROPERTY(Transient) TObjectPtr<UBarragePattern> SourcePattern = nullptr;
     virtual UObject* FactoryCreateNew(UClass* Class, UObject* InParent, FName Name, EObjectFlags Flags, UObject* Context, FFeedbackContext* Warn) override;
 };

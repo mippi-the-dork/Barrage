@@ -36,3 +36,13 @@ public:
     virtual TSoftClassPtr<UObject> GetAssetClass() const override;
     virtual TConstArrayView<FAssetCategoryPath> GetAssetCategories() const override;
 };
+
+UCLASS()
+class UBarragePresetAssetDefinition : public UBarragePatternAssetDefinition
+{
+    GENERATED_BODY()
+public:
+    virtual FText GetAssetDisplayName() const override;
+    virtual FLinearColor GetAssetColor() const override;
+    virtual TSoftClassPtr<UObject> GetAssetClass() const override;
+};

@@ -38,3 +38,7 @@ EAssetCommandResult UBarragePatternAssetDefinition::OpenAssets(const FAssetOpenA
     }
     return bOpenedAny ? EAssetCommandResult::Handled : EAssetCommandResult::Unhandled;
 }
+
+FText UBarragePresetAssetDefinition::GetAssetDisplayName() const { return NSLOCTEXT("Barrage", "Preset", "Barrage Preset"); }
+FLinearColor UBarragePresetAssetDefinition::GetAssetColor() const { return FLinearColor(0.25f,0.8f,0.5f); }
+TSoftClassPtr<UObject> UBarragePresetAssetDefinition::GetAssetClass() const { return UBarragePreset::StaticClass(); }
