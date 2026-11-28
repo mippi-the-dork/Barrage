@@ -1,4 +1,5 @@
 #include "BarragePatternLibrary.h"
+#include "BarrageAimMath.h"
 #include "Math/RandomStream.h"
 #include <cmath>
 
@@ -76,7 +77,8 @@ bool FBarragePatternLibrary::Generate(const FBarragePatternSettings& S, TArray<F
         S.Radius < 0 || S.InnerRadius < 0 || S.Width < 0 || S.Height < 0 || S.Length < 0 ||
         S.IntervalSeconds < 0 || S.DelaySeconds < 0 || S.GapFraction < 0 || S.GapFraction > 1 ||
         S.ConeAngleDegrees < 0 || S.ConeAngleDegrees > 179 ||
-        S.Petals < 1 || S.Petals > 32 || LocalTarget.ContainsNaN()) return false;
+        S.Petals < 1 || S.Petals > 32 || LocalTarget.ContainsNaN() ||
+        !FMath::IsFinite(S.AimStrength) || S.AimStrength < 0.0f || S.AimStrength > 1.0f) return false;
 
     // Never silently reduce the author's requested spawn count. Preflight the emission
     // budget before entering any loop; all products are evaluated as doubles to avoid
@@ -101,7 +103,9 @@ bool FBarragePatternLibrary::Generate(const FBarragePatternSettings& S, TArray<F
             !FMath::IsFinite(Time) || Time < 0 || Time > 86400.0) return false;
         if (S.bAimAtTarget && bHasTarget && Anchor == INDEX_NONE && !bOrbit)
         {
-            Direction = (LocalTarget - Position).GetSafeNormal(UE_SMALL_NUMBER, Direction.GetSafeNormal(UE_SMALL_NUMBER, FVector::ForwardVector));
+            const FVector Original = Direction.GetSafeNormal(UE_SMALL_NUMBER, FVector::ForwardVector);
+            const FVector Toward = (LocalTarget - Position).GetSafeNormal(UE_SMALL_NUMBER, Original);
+            Direction = BarrageAimMath::BlendDirections(Original, Toward, S.AimStrength);
         }
         FBarragePatternEmission E;
         E.LocalPosition = Position;

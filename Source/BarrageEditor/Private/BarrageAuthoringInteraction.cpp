@@ -1,4 +1,5 @@
 #include "BarrageAuthoringInteraction.h"
+#include "BarrageStackPrograms.h"
 #include "BarragePatternParameterPolicy.h"
 #include "BarrageFormationStack.h"
 #include "BarrageEmissionStack.h"
@@ -55,8 +56,83 @@ bool FBarrageAuthoringInteraction::CanRemoveMotionBlock(const FBarragePatternLay
 {
     const int32 I=Layer.MotionBlocks.IndexOfByPredicate([Id](const FBarrageMotionBlock& B)
     {return B.BlockId==Id;});
-    return I>=2 && Layer.MotionBlocks[I].Kind==EBarrageMotionBlockKind::Movement &&
-        Layer.MotionBlocks[I-1].Kind==EBarrageMotionBlockKind::Transition;
+    if (I < 0) return false;
+    if (Layer.MotionBlocks[I].Kind == EBarrageMotionBlockKind::Tracker) return true;
+    if (I == 0 || Layer.MotionBlocks[I].Kind != EBarrageMotionBlockKind::Movement) return false;
+    return Layer.MotionBlocks[I - 1].Kind == EBarrageMotionBlockKind::Transition;
+}
+
+bool FBarrageAuthoringInteraction::MoveMotionPhase(FBarragePatternLayer& Layer, FGuid MovementBlockId, int32 Direction)
+{
+    if (Direction != -1 && Direction != 1) return false;
+    TArray<TArray<FBarrageMotionBlock>> Phases;
+    TArray<FBarrageMotionBlock> Transitions;
+    int32 SelectedPhase = INDEX_NONE;
+    for (const FBarrageMotionBlock& Block : Layer.MotionBlocks)
+    {
+        if (Block.Kind == EBarrageMotionBlockKind::Movement)
+        {
+            if (!Phases.IsEmpty() && Phases.Last().IsEmpty()) return false;
+            if (!Phases.IsEmpty() && Transitions.Num() != Phases.Num()) return false;
+            Phases.AddDefaulted();
+            Phases.Last().Add(Block);
+            if (Block.BlockId == MovementBlockId) SelectedPhase = Phases.Num() - 1;
+        }
+        else if (Block.Kind == EBarrageMotionBlockKind::Tracker)
+        {
+            if (Phases.IsEmpty() || Phases.Last().Num() != 1) return false;
+            Phases.Last().Add(Block);
+        }
+        else if (Block.Kind == EBarrageMotionBlockKind::Transition)
+        {
+            if (Phases.IsEmpty() || Transitions.Num() != Phases.Num() - 1) return false;
+            Transitions.Add(Block);
+        }
+        else return false;
+    }
+    if (Phases.IsEmpty() || Transitions.Num() + 1 != Phases.Num() || SelectedPhase == INDEX_NONE ||
+        !Phases.IsValidIndex(SelectedPhase + Direction)) return false;
+    Phases.Swap(SelectedPhase,SelectedPhase + Direction);
+    FBarragePatternLayer Candidate = Layer;
+    Candidate.MotionBlocks.Reset();
+    for (int32 Index=0;Index<Phases.Num();++Index)
+    {
+        if(Index>0) Candidate.MotionBlocks.Add(Transitions[Index-1]);
+        Candidate.MotionBlocks.Append(Phases[Index]);
+    }
+    FBarrageMotionProgram Compiled;
+    if (!FBarrageStackPrograms::CompileMotion(Candidate,Compiled)) return false;
+    Layer.MotionBlocks = MoveTemp(Candidate.MotionBlocks);
+    return true;
+}
+
+bool FBarrageAuthoringInteraction::InsertTrackerForPhase(FBarragePatternLayer& Layer, FGuid MovementBlockId)
+{
+    if (Layer.MotionBlocks.Num() >= FBarrageMotionProgram::MaxPhases * 3 - 1) return false;
+    const int32 Index = Layer.MotionBlocks.IndexOfByPredicate([MovementBlockId](const FBarrageMotionBlock& Block)
+    { return Block.BlockId == MovementBlockId && Block.Kind == EBarrageMotionBlockKind::Movement; });
+    if (Index == INDEX_NONE) return false;
+    const EBarrageMovementMode Mode = Layer.MotionBlocks[Index].Movement;
+    if (Mode != EBarrageMovementMode::Profile && Mode != EBarrageMovementMode::Curved &&
+        Mode != EBarrageMovementMode::GroupOrbit) return false;
+    if (Layer.MotionBlocks.IsValidIndex(Index+1) && Layer.MotionBlocks[Index+1].Kind == EBarrageMotionBlockKind::Tracker)
+        return false;
+    FBarragePatternLayer Candidate = Layer;
+    if (Mode == EBarrageMovementMode::GroupOrbit && Candidate.MotionBlocks[Index].GroupTravelVelocity.IsNearlyZero())
+    {
+        // Tracking a stationary center has no directional speed to steer.
+        // Give a newly attached Tracker a usable initial local velocity; the
+        // author can edit it immediately from the adjacent Group Orbit card.
+        Candidate.MotionBlocks[Index].GroupTravelVelocity = FVector(100, 0, 0);
+    }
+    FBarrageMotionBlock Tracker;
+    Tracker.Kind = EBarrageMotionBlockKind::Tracker;
+    Tracker.BlockId = FGuid::NewGuid();
+    Candidate.MotionBlocks.Insert(Tracker,Index+1);
+    FBarrageMotionProgram Program;
+    if (!FBarrageStackPrograms::CompileMotion(Candidate,Program)) return false;
+    Layer.MotionBlocks = MoveTemp(Candidate.MotionBlocks);
+    return true;
 }
 
 bool FBarrageAuthoringInteraction::IsLayerVisible(int32 PointLayer, const TSet<int32>& HiddenLayers)

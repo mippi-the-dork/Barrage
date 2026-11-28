@@ -61,12 +61,12 @@ public:
     UFUNCTION(BlueprintCallable, Category="Barrage|Patterns")
     FBarragePlaybackHandle StartPatternTracked(UBarragePattern* Pattern, FTransform SpawnTransform,
         bool bHasTarget, FVector TargetWorldPosition, AActor* SourceActor = nullptr,
-        bool bIgnoreSourceForCollision = true);
+        bool bIgnoreSourceForCollision = true, AActor* TrackerTargetActor = nullptr);
 
     UFUNCTION(BlueprintCallable, Category="Barrage|Sequences")
     FBarragePlaybackHandle StartSequenceTracked(UBarrageSequence* Sequence, FTransform SpawnTransform,
         bool bHasTarget, FVector TargetWorldPosition, AActor* SourceActor = nullptr,
-        bool bIgnoreSourceForCollision = true);
+        bool bIgnoreSourceForCollision = true, AActor* TrackerTargetActor = nullptr);
 
     UFUNCTION(BlueprintCallable, Category="Barrage|Patterns")
     bool CancelPlayback(FBarragePlaybackHandle Handle);

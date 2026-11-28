@@ -51,22 +51,39 @@ struct BARRAGERUNTIME_API FBarrageProjectileHandle
     bool IsSet() const { return Slot != INDEX_NONE && Generation > 0; }
 };
 
+UENUM(BlueprintType)
+enum class EBarrageMotionTransitionCondition : uint8
+{
+    Age UMETA(DisplayName="Projectile Age"),
+    Distance UMETA(DisplayName="Travel Distance")
+};
+
 // Fixed-capacity compiled phase instructions. This is value data, with no per-shot
 // UObjects, virtual dispatch, dynamic allocation, or event graph evaluation.
 struct BARRAGERUNTIME_API FBarrageMotionPhase
 {
     // End of this phase, measured as absolute projectile age. Last phase is unbounded.
     float EndAgeSeconds = FLT_MAX;
+    // Cumulative path length since spawn, not displacement or phase-local distance.
+    float EndDistanceCm = FLT_MAX;
+    EBarrageMotionTransitionCondition TransitionCondition = EBarrageMotionTransitionCondition::Age;
     EBarrageMotionMode Mode = EBarrageMotionMode::FreeFlight;
     bool bStationary = false;
     float TurnRateDegrees = 0.0f;
     float SpeedMultiplier = 1.0f;
     bool bIgnoreGravity = false;
+    bool bTracker = false;
+    float TrackerTurnRateDegrees = 180.0f;
+    // Optional intercept prediction. With no valid target velocity, falls back
+    // to direct aim. Only a moving target Actor supplies velocity in runtime.
+    bool bTrackerPredictLead = false;
+    float TrackerMaxLeadSeconds = 2.0f;
 };
 struct BARRAGERUNTIME_API FBarrageMotionProgram
 {
-    static constexpr int32 MaxPhases = 6;
+    static constexpr int32 MaxPhases = 16;
     uint8 NumPhases = 0;
+    bool bTracksDistance = false;
     FBarrageMotionPhase Phases[MaxPhases];
 };
 
@@ -96,6 +113,10 @@ struct BARRAGERUNTIME_API FBarrageSpawnParams
     // Compiled authored motion, bypassing the single-transition compatibility fields
     // when nonempty. Stored inline to avoid per-projectile heap allocation.
     FBarrageMotionProgram MotionProgram;
+    // Optional target for Motion Tracker. Weak actor is never owned by the projectile.
+    TWeakObjectPtr<AActor> TrackerTargetActor;
+    FVector TrackerTargetPosition = FVector::ZeroVector;
+    bool bHasTrackerTarget = false;
     // Internal render batch ID. Zero means no mesh renderer; not authorable in Details.
     int32 RenderStyleId = 0;
     float RenderScale = 1.0f;
@@ -113,7 +134,7 @@ struct BARRAGERUNTIME_API FBarrageSpawnParams
     float GroupTurnRateDegrees = 0.0f;
     float GroupReleaseSeconds = 0.0f;
     float GroupClockOffsetSeconds = 0.0f;
-    int32 GroupIdentity = INDEX_NONE;
+    int64 GroupIdentity = INDEX_NONE;
     // Optional one-shot movement phase: hold position, then release into profile flight.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Movement", meta=(ClampMin="0")) float StationaryReleaseAgeSeconds = 0.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Movement") FVector ReleaseVelocity = FVector::ZeroVector;
@@ -172,6 +193,8 @@ struct BARRAGERUNTIME_API FBarrageProjectileSnapshot
     UPROPERTY(BlueprintReadOnly, Category="Barrage") FVector Position = FVector::ZeroVector;
     UPROPERTY(BlueprintReadOnly, Category="Barrage") FVector PreviousPosition = FVector::ZeroVector;
     UPROPERTY(BlueprintReadOnly, Category="Barrage") FVector Velocity = FVector::ZeroVector;
+    // Mesh + directional facing, independent of translation (Stationary + Tracker).
+    UPROPERTY(BlueprintReadOnly, Category="Barrage") FVector FacingDirection = FVector::ForwardVector;
     UPROPERTY(BlueprintReadOnly, Category="Barrage") float Age = 0.0f;
     UPROPERTY(BlueprintReadOnly, Category="Barrage") float Lifetime = 0.0f;
 };

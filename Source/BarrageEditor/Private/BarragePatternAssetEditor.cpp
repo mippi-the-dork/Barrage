@@ -324,6 +324,7 @@ void FBarragePatternAssetEditor::RebuildPreview()
     {
         if (!P->Layers.IsValidIndex(SelectedLayer)) SelectedLayer = P->Layers.IsEmpty() ? INDEX_NONE : 0;
     }
+    PreviewModel->SetTarget(PreviewTarget);
     PreviewModel->Rebuild(Pattern.Get());
     PreviewTimeSeconds = FMath::Min(PreviewTimeSeconds, GetTimelineDuration());
     SyncCanvas();
@@ -380,10 +381,13 @@ float FBarragePatternAssetEditor::GetScrubValue() const
 FText FBarragePatternAssetEditor::GetStatus() const
 {
     if (!PreviewModel) return FText::GetEmpty();
-    const FString State = PreviewModel->IsValid()
+    FString State = PreviewModel->IsValid()
         ? FString::Printf(TEXT("%d / %d emitted. %s"), PreviewModel->CountThrough(PreviewTimeSeconds),
             PreviewModel->GetCount(), *PreviewModel->GetMessage())
         : PreviewModel->GetMessage();
+    if (PreviewTarget.bEnabled)
+        State += FString::Printf(TEXT(" | Target hits (estimated): %d"),
+            PreviewModel->CountTargetHitsThrough(PreviewTimeSeconds));
     return FText::FromString(State);
 }
 
@@ -523,6 +527,63 @@ TSharedRef<SWidget> FBarragePatternAssetEditor::MakePreviewOptionsMenu()
             .Value_Lambda([this] { return PlaybackRate; })
             .OnValueChanged_Lambda([this](float Rate) { PlaybackRate = FMath::Clamp(Rate, 0.1f, 4.0f); })],
         LOCTEXT("PlaybackRateOption", "Playback speed (x)"));
+    Menu.EndSection();
+    Menu.BeginSection(TEXT("TargetPreview"), LOCTEXT("TargetPreviewMenu", "Target Preview (editor only)"));
+    Menu.AddMenuEntry(LOCTEXT("TargetEnabled", "Show target capsule"),
+        LOCTEXT("TargetEnabledTip", "Show a simulated collision capsule and estimate projectile impacts. This does not alter Pattern assets or PIE behavior."),
+        FSlateIcon(), FUIAction(
+            FExecuteAction::CreateLambda([this]() { PreviewTarget.bEnabled = !PreviewTarget.bEnabled; RebuildPreview(); }),
+            FCanExecuteAction(), FIsActionChecked::CreateLambda([this](){ return PreviewTarget.bEnabled; })),
+        NAME_None, EUserInterfaceActionType::ToggleButton);
+    Menu.AddMenuEntry(LOCTEXT("TargetPingPong", "Ping-pong along arc"),
+        LOCTEXT("TargetPingPongTip", "Move the capsule back and forth across the X axis along a parabolic arch."),
+        FSlateIcon(), FUIAction(
+            FExecuteAction::CreateLambda([this]() { PreviewTarget.bPingPong = !PreviewTarget.bPingPong; RebuildPreview(); }),
+            FCanExecuteAction(), FIsActionChecked::CreateLambda([this](){ return PreviewTarget.bPingPong; })),
+        NAME_None, EUserInterfaceActionType::ToggleButton);
+    auto TargetValue = [this, &Menu](const FText& Caption, const FText& Tip,
+        float FBarragePreviewTarget::*Field, float Minimum, float Maximum)
+    {
+        Menu.AddWidget(SNew(SBox).WidthOverride(145.0f)
+            [SNew(SSpinBox<float>).MinValue(Minimum).MaxValue(Maximum)
+                .MinSliderValue(Minimum).MaxSliderValue(Maximum)
+                .ToolTipText(Tip)
+                .Value_Lambda([this, Field] { return PreviewTarget.*Field; })
+                .OnValueChanged_Lambda([this, Field, Minimum, Maximum](float Value)
+                {
+                    PreviewTarget.*Field = FMath::Clamp(Value, Minimum, Maximum);
+                    RebuildPreview();
+                })], Caption);
+    };
+    TargetValue(LOCTEXT("TargetRange", "Half travel range (cm)"),
+        LOCTEXT("TargetRangeTip", "Half the capsule's horizontal ping-pong travel span."),
+        &FBarragePreviewTarget::HalfRangeCm, 1.0f, 5000.0f);
+    TargetValue(LOCTEXT("TargetArc", "Arc height (cm)"),
+        LOCTEXT("TargetArcTip", "Height of the parabolic arch above the travel endpoints. Negative values invert it."),
+        &FBarragePreviewTarget::ArcHeightCm, -2000.0f, 2000.0f);
+    TargetValue(LOCTEXT("TargetSpeed", "Horizontal speed (cm/s)"),
+        LOCTEXT("TargetSpeedTip", "Constant horizontal ping-pong speed. Actual path speed varies with the arc slope."),
+        &FBarragePreviewTarget::SpeedCmPerSecond, 1.0f, 5000.0f);
+    TargetValue(LOCTEXT("TargetRadius", "Capsule radius (cm)"),
+        LOCTEXT("TargetRadiusTip", "Editor preview collision capsule radius."),
+        &FBarragePreviewTarget::CapsuleRadiusCm, 1.0f, 500.0f);
+    TargetValue(LOCTEXT("TargetHeight", "Capsule half-height (cm)"),
+        LOCTEXT("TargetHeightTip", "Capsule half-height including hemisphere caps."),
+        &FBarragePreviewTarget::CapsuleHalfHeightCm, 1.0f, 700.0f);
+    for (int32 Axis = 0; Axis < 3; ++Axis)
+    {
+        const FText Caption = Axis == 0 ? LOCTEXT("TargetCenterX", "Center X (cm)") :
+            Axis == 1 ? LOCTEXT("TargetCenterY", "Center Y (cm)") : LOCTEXT("TargetCenterZ", "Center Z (cm)");
+        Menu.AddWidget(SNew(SBox).WidthOverride(145.0f)
+            [SNew(SSpinBox<float>).MinValue(-50000.0f).MaxValue(50000.0f)
+                .MinSliderValue(-2500.0f).MaxSliderValue(2500.0f)
+                .Value_Lambda([this, Axis] { return static_cast<float>(PreviewTarget.Center[Axis]); })
+                .OnValueChanged_Lambda([this, Axis](float Value)
+                {
+                    PreviewTarget.Center[Axis] = Value;
+                    RebuildPreview();
+                })], Caption);
+    }
     Menu.EndSection();
     return Menu.MakeWidget();
 }

@@ -135,7 +135,7 @@ struct BARRAGERUNTIME_API FBarragePatternSettings
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Pattern", meta=(Units="cm", ClampMin="0", ToolTip="Lateral extent in local Y, measured in centimeters.")) float Width = 400.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Pattern", meta=(Units="cm", ClampMin="0", ToolTip="Vertical extent in local Z, measured in centimeters. Scatter and Rain use Height only with Volume enabled.")) float Height = 400.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Pattern", meta=(Units="cm", ClampMin="0", ToolTip="Depth or extent along local X, or full vertical extent of a Helix along local Z.")) float Length = 400.0f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Pattern", meta=(Units="deg", ToolTip="Angular offset in degrees. XY formations rotate around local Z; Cone and Hemisphere use azimuth around local X.")) float AngleOffsetDegrees = 0.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Pattern", meta=(DisplayName="Angle Offset", Units="deg", ToolTip="Angular offset in degrees. XY formations rotate around local Z; Cone and Hemisphere use azimuth around local X.")) float AngleOffsetDegrees = 0.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Pattern", meta=(Units="deg", ClampMin="0", ClampMax="360", ToolTip="Total angular width of Arc formation in degrees (legacy setting for Fan/Sweep).")) float AngleSpanDegrees = 90.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Pattern", meta=(ToolTip="Number of formation turns for Helix (legacy rotation/sweep parameter).")) float Turns = 2.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Movement", meta=(Units="deg/s", ToolTip="Turn rate in degrees per second. Visible when Movement is Orbit or Curved. Curved turns about the layer's local up axis.")) float AngularVelocityDegrees = 180.0f;
@@ -149,7 +149,8 @@ struct BARRAGERUNTIME_API FBarragePatternSettings
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Pattern", meta=(ToolTip="Deterministic seed used to place Scatter and Rain projectiles.")) int32 RandomSeed = 1337;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Pattern", meta=(ToolTip="Point radial projectiles toward the formation center instead of away from it.")) bool bInward = false;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Pattern", meta=(ToolTip="Scatter and Rain distribute points through a 3D volume; Cone fills the cone interior rather than its rim.")) bool bVolume = false;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Pattern", meta=(ToolTip="When an emitter supplies a target, override each non-child shot direction toward a target snapshot taken when playback begins.")) bool bAimAtTarget = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Pattern", meta=(ToolTip="Blend authored initial directions toward the target when each projectile is emitted. Spawn positions are unchanged.")) bool bAimAtTarget = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage|Pattern", meta=(DisplayName="Aim Strength", ClampMin="0", ClampMax="1", UIMin="0", UIMax="1", ToolTip="0 preserves the authored Initial Direction. 1 aims each projectile directly at the target from its own spawn position. Intermediate values blend the two.")) float AimStrength = 1.0f;
 };
 
 // Compact, UObject-free output for tests, simulation spawning, and eventual editor preview.

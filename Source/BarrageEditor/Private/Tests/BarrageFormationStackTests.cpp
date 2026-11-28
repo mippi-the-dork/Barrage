@@ -465,6 +465,9 @@ bool FBarrageEmissionPingPong::RunTest(const FString&)
     TestEqual(TEXT("Return sweep"),A.Num(),8);
     TestTrue(TEXT("Reverse endpoint"),A[4].LocalPosition.Equals(A[3].LocalPosition,0.001));
     TestTrue(TEXT("Reverse time"),FMath::IsNearlyEqual(A[4].TimeSeconds,1.3f,0.001f));
+    for (int32 I=5;I<8;++I)
+        TestTrue(TEXT("Return sweep timing moves forward as projectile order reverses"),
+            A[I].TimeSeconds>=A[I-1].TimeSeconds);
     return true;
 }
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBarrageEmissionTimeOps,

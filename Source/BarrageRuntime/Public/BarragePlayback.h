@@ -13,6 +13,8 @@ struct BARRAGERUNTIME_API FBarrageScheduledShot
     UPROPERTY() TObjectPtr<UBarrageProjectileProfile> Profile = nullptr;
     FVector WorldPosition = FVector::ZeroVector;
     FVector WorldDirection = FVector::ForwardVector;
+    FVector AuthoredWorldDirection = FVector::ForwardVector; // final Initial Direction, before target aiming
+    float AimStrength = 0.0f; // 0 disables target aiming; resolved at spawn for moving targets
     FVector OrbitCenter = FVector::ZeroVector;
     FVector OrbitAxis = FVector::UpVector;
     double FireTime = 0.0;
@@ -32,6 +34,8 @@ struct BARRAGERUNTIME_API FBarrageScheduledShot
     bool bStationary = false;
     bool bCurved = false;
     FBarrageMotionProgram MotionProgram;
+    FVector TrackerTargetPosition = FVector::ZeroVector;
+    bool bHasTrackerTarget = false;
     float StationaryReleaseAgeSeconds = 0.0f;
     float MovementTransitionAgeSeconds = 0.0f;
     EBarrageTransitionMovement MovementTransitionTo = EBarrageTransitionMovement::Profile;
@@ -87,8 +91,10 @@ struct BARRAGERUNTIME_API FBarrageActivePlayback
     TArray<int32> EventRuleOrdinals; // sparse runtime counters; no projectile-local overhead
     int32 NextInvocationId = 0;
     int32 EventShotsEmitted = 0;
+    int32 NextEventGroupIdentity = -2; // distinct group per runtime event occurrence (-1 means invalid)
     int32 MaxEventShots = 50000; // cap includes actual children across every trigger
     TWeakObjectPtr<AActor> SourceActor;
+    TWeakObjectPtr<AActor> TrackerTargetActor;
     bool bIgnoreSourceForCollision = true;
     double ElapsedSeconds = 0.0;
     int32 NextShot = 0;

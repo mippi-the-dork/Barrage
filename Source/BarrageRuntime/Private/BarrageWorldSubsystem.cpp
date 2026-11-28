@@ -1,4 +1,5 @@
 #include "BarrageWorldSubsystem.h"
+#include "BarrageAimMath.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 #include "Stats/Stats.h"
@@ -299,8 +300,8 @@ void UBarrageWorldSubsystem::UpdateMeshBatches()
         if (!MeshTransformScratch.IsValidIndex(Style)) continue;
         const FVector Velocity = Simulation.GetVelocityAt(I);
         if (!Velocity.IsNearlyZero()) PotentiallyStationary[Style] = false;
-        const FQuat Rotation = Velocity.IsNearlyZero() ? FQuat::Identity
-            : FQuat::FindBetweenNormals(FVector::ForwardVector, Velocity.GetSafeNormal());
+        const FVector Facing = Simulation.GetFacingAt(I);
+        const FQuat Rotation = FQuat::FindBetweenNormals(FVector::ForwardVector, Facing.GetSafeNormal());
         MeshTransformScratch[Style].Add(FTransform(Rotation, Simulation.GetPositionAt(I),
             FVector(Simulation.GetRenderScaleAt(I))));
     }
@@ -402,11 +403,15 @@ void UBarrageWorldSubsystem::EnqueueEventShots(FBarrageActivePlayback& Playback,
         Playback.EventRuleOrdinals.SetNumZeroed(Playback.EventLayers.Num());
     const int32 Ordinal=Playback.EventRuleOrdinals[RuleIndex]++;
     if (Rule.EveryNth>1 && Ordinal%Rule.EveryNth!=0) return;
+    // Each impact/distance/expiration occurrence has its own center, even when
+    // the same event Layer template is invoked repeatedly.
+    const int32 EventGroupIdentity = Playback.NextEventGroupIdentity--;
     for (const FBarrageScheduledShot& Template : Rule.TemplateShots)
     {
         if (Playback.EventShotsEmitted + Playback.PendingEventShots.Num() >= Playback.MaxEventShots) break;
         FBarragePendingEventShot& Pending = Playback.PendingEventShots.AddDefaulted_GetRef();
         Pending.Shot = Template;
+        if (Template.bGroupOrbit) Pending.Shot.GroupIdentity = EventGroupIdentity;
         Pending.Origin = Origin;
         Pending.FireTime = Playback.ElapsedSeconds + double(Rule.StartDelaySeconds) + Template.FireTime;
     }
@@ -491,13 +496,27 @@ FBarrageProjectileHandle UBarrageWorldSubsystem::SpawnPlaybackShot(FBarrageActiv
     const FBarrageScheduledShot& Shot, const FVector& Position, const FVector& AnchorOffset)
 {
     if (!Shot.Profile) return FBarrageProjectileHandle();
+    // Target aiming is evaluated at the actual spawn instant, not when an
+    // emission schedule is compiled. This matters for staggered/repeated shots.
+    FVector Heading = Shot.WorldDirection;
+    if (Shot.AimStrength > 0.0f)
+    {
+        FVector TargetPosition = Shot.TrackerTargetPosition;
+        if (AActor* TargetActor = Playback.TrackerTargetActor.Get())
+            if (IsValid(TargetActor)) TargetPosition = TargetActor->GetActorLocation();
+        const FVector Toward = (TargetPosition - Position).GetSafeNormal(UE_SMALL_NUMBER, Shot.AuthoredWorldDirection);
+        Heading = BarrageAimMath::BlendDirections(Shot.AuthoredWorldDirection, Toward, Shot.AimStrength);
+    }
     FBarrageSpawnParams Params;
     Params.Position = Position;
-    Params.Velocity = Shot.bStationary ? FVector::ZeroVector : Shot.WorldDirection * Shot.Profile->Speed;
+    Params.Velocity = Shot.bStationary ? FVector::ZeroVector : Heading * Shot.Profile->Speed;
     Params.Lifetime = Shot.Profile->Lifetime;
     Params.GravityMode = (Shot.bStationary || Shot.bCurved) ? EBarrageGravityMode::None : Shot.Profile->GravityMode;
     Params.ConstantAcceleration = Shot.Profile->ConstantAcceleration;
     Params.MotionProgram = Shot.MotionProgram;
+    Params.TrackerTargetActor = Playback.TrackerTargetActor;
+    Params.TrackerTargetPosition = Shot.TrackerTargetPosition;
+    Params.bHasTrackerTarget = Shot.bHasTrackerTarget;
     if (Shot.bGroupOrbit)
     {
         Params.bGroupOrbit = true;
@@ -506,25 +525,27 @@ FBarrageProjectileHandle UBarrageWorldSubsystem::SpawnPlaybackShot(FBarrageActiv
         Params.GroupTurnRateDegrees = Shot.GroupTurnRateDegrees;
         Params.GroupReleaseSeconds = Shot.GroupReleaseSeconds;
         Params.GroupClockOffsetSeconds = Shot.GroupClockOffsetSeconds;
-        Params.GroupIdentity = Shot.GroupIdentity;
+        // Scope the center identity to the active playback as well as its
+        // invocation/layer, so independent emitters cannot share a controller.
+        Params.GroupIdentity = (int64(Playback.Id) << 32) | uint32(Shot.GroupIdentity);
         Params.OrbitAxis = Shot.OrbitAxis;
         Params.GravityMode = EBarrageGravityMode::None;
         Params.ReleaseGravityMode = Shot.Profile->GravityMode;
     }
-    Params.TransitionLaunchVelocity = Shot.WorldDirection * Shot.Profile->Speed;
+    Params.TransitionLaunchVelocity = Heading * Shot.Profile->Speed;
     Params.ReleaseGravityMode = Shot.Profile->GravityMode;
     Params.SourceActor = Playback.SourceActor.Get();
     Params.bIgnoreSourceActorForCollision = Playback.bIgnoreSourceForCollision;
     if (Shot.bStationary && Shot.StationaryReleaseAgeSeconds > 0.0f)
     {
         Params.StationaryReleaseAgeSeconds = Shot.StationaryReleaseAgeSeconds;
-        Params.ReleaseVelocity = Shot.WorldDirection * Shot.Profile->Speed;
+        Params.ReleaseVelocity = Heading * Shot.Profile->Speed;
         Params.ReleaseGravityMode = Shot.Profile->GravityMode;
     }
     if (Shot.MovementTransitionAgeSeconds > 0.0f)
     {
         Params.TransitionAgeSeconds = Shot.MovementTransitionAgeSeconds;
-        Params.TransitionLaunchVelocity = Shot.WorldDirection * Shot.Profile->Speed;
+        Params.TransitionLaunchVelocity = Heading * Shot.Profile->Speed;
         Params.TransitionGravityMode = Shot.Profile->GravityMode;
         Params.TransitionTurnRateDegrees = Shot.TransitionTurnRateDegrees;
         Params.OrbitAxis = Shot.OrbitAxis;
@@ -631,12 +652,15 @@ int32 UBarrageWorldSubsystem::PlayPattern(UBarragePattern* Pattern, FTransform S
 }
 
 FBarragePlaybackHandle UBarrageWorldSubsystem::StartPatternTracked(UBarragePattern* Pattern, FTransform SpawnTransform,
-    bool bHasTarget, FVector TargetWorldPosition, AActor* SourceActor, bool bIgnoreSourceForCollision)
+    bool bHasTarget, FVector TargetWorldPosition, AActor* SourceActor, bool bIgnoreSourceForCollision, AActor* TrackerTargetActor)
 {
     FBarragePlaybackHandle Handle;
     FBarrageActivePlayback Playback;
     if (FBarragePatternCompiler::CompilePattern(Pattern, SpawnTransform, bHasTarget, TargetWorldPosition, Playback))
+    {
+        Playback.TrackerTargetActor = TrackerTargetActor;
         QueuePlayback(MoveTemp(Playback), SourceActor, bIgnoreSourceForCollision, &Handle);
+    }
     return Handle;
 }
 
@@ -654,12 +678,15 @@ int32 UBarrageWorldSubsystem::PlaySequence(UBarrageSequence* Sequence, FTransfor
 }
 
 FBarragePlaybackHandle UBarrageWorldSubsystem::StartSequenceTracked(UBarrageSequence* Sequence, FTransform SpawnTransform,
-    bool bHasTarget, FVector TargetWorldPosition, AActor* SourceActor, bool bIgnoreSourceForCollision)
+    bool bHasTarget, FVector TargetWorldPosition, AActor* SourceActor, bool bIgnoreSourceForCollision, AActor* TrackerTargetActor)
 {
     FBarragePlaybackHandle Handle;
     FBarrageActivePlayback Playback;
     if (FBarragePatternCompiler::CompileSequence(Sequence, SpawnTransform, bHasTarget, TargetWorldPosition, Playback))
+    {
+        Playback.TrackerTargetActor = TrackerTargetActor;
         QueuePlayback(MoveTemp(Playback), SourceActor, bIgnoreSourceForCollision, &Handle);
+    }
     return Handle;
 }
 

@@ -120,12 +120,37 @@ namespace
             TSharedPtr<FStructOnScope> StructDefaults;
             if(OwnerStruct) StructDefaults=MakeShared<FStructOnScope>(OwnerStruct);
             const FText Name=Label.IsEmpty() ? Property->GetPropertyDisplayName() : Label;
-            // Native property widgets already render their own unit suffixes.
+            // Slate's generic value widget can be SNullWidget for a struct field
+            // nested in an array element (notably FVector GroupTravelVelocity).
+            // Render native scalar property handles for all three vector axes.
+            // This preserves property notifications, transactions, undo and units.
+            TSharedRef<SWidget> ValueWidget = Property->CreatePropertyValueWidget(false);
+            if (const FStructProperty* StructProperty = CastField<FStructProperty>(LeafProperty))
+            {
+                if (StructProperty->Struct == TBaseStructure<FVector>::Get())
+                {
+                    const TSharedRef<SVerticalBox> VectorAxes = SNew(SVerticalBox);
+                    for (const TCHAR* AxisName : {TEXT("X"), TEXT("Y"), TEXT("Z")})
+                    {
+                        const TSharedPtr<IPropertyHandle> Axis = Property->GetChildHandle(FName(AxisName));
+                        if (!Axis.IsValid()) continue;
+                        VectorAxes->AddSlot().AutoHeight().Padding(0, 1)
+                        [SNew(SHorizontalBox)
+                            + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+                                [SNew(SBox).WidthOverride(12.0f)
+                                    [SNew(STextBlock).Text(FText::FromString(AxisName))]]
+                            + SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+                                [Axis->CreatePropertyValueWidget(false)]];
+                    }
+                    ValueWidget = VectorAxes;
+                }
+            }
+            // Native numeric property widgets already render their unit suffixes.
             // Never add a second suffix outside the input field.
             AddWidget(Name,
                 SNew(SHorizontalBox).ToolTipText(Property->GetToolTipText())
                     +SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
-                        [SNew(SBox).IsEnabled(bEditable)[Property->CreatePropertyValueWidget(false)]]
+                        [SNew(SBox).IsEnabled(bEditable)[ValueWidget]]
                     +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
                         [SNew(SBox).WidthOverride(24.0f)
                             [SNew(SButton).ButtonStyle(FAppStyle::Get(),"SimpleButton")
@@ -515,10 +540,7 @@ void FBarragePatternDetailsCustomization::CustomizeDetails(IDetailLayoutBuilder&
                         {
                             Edit(LOCTEXT("AddActivationTransaction","Add Activation Block"),[Kind](FBarragePatternLayer& L)
                             {
-                                if(L.ActivationBlocks.Num()>=64 ||
-                                    ((Kind==EBarrageActivationBlockKind::Delay || Kind==EBarrageActivationBlockKind::Filter) &&
-                                     L.ActivationBlocks.ContainsByPredicate([Kind](const FBarrageActivationBlock& B)
-                                     {return B.bEnabled && B.Kind==Kind;}))) return;
+                                if(L.ActivationBlocks.Num()>=64) return;
                                 FBarrageActivationBlock B;B.BlockId=FGuid::NewGuid();B.Kind=Kind;
                                 L.ActivationBlocks.Add(B);
                             });
@@ -828,7 +850,11 @@ void FBarragePatternDetailsCustomization::CustomizeDetails(IDetailLayoutBuilder&
         if(Mode==D::Spread || Mode==D::Sweep)AddDirection(TEXT("DirectionSpanDegrees"));
         if(Mode==D::Rotating || Mode==D::Sweep)AddDirection(TEXT("DirectionTurns"));
         if(Mode==D::Cone){AddDirection(TEXT("DirectionConeAngleDegrees"));AddDirection(TEXT("bFillCone"));}
-        if(Current.Settings.Movement!=EBarrageMovementMode::Orbit)AddDirection(TEXT("bAimAtTarget"));
+        if(Current.Settings.Movement!=EBarrageMovementMode::Orbit)
+        {
+            AddDirection(TEXT("bAimAtTarget"),true);
+            if(Current.Settings.bAimAtTarget)AddDirection(TEXT("AimStrength"));
+        }
         AddCard(Items,MakeCard(Prefix+TEXT("Emission.Direction"),LOCTEXT("DirectionTitle","Initial Direction"),ECardGuard::Fixed,Direction));
         const TSharedPtr<IPropertyHandle> Parent=Layer->GetChildHandle(TEXT("EmissionBlocks"));
         const TSharedPtr<IPropertyHandleArray> Array=Parent.IsValid()?Parent->AsArray():nullptr;
@@ -943,6 +969,90 @@ void FBarragePatternDetailsCustomization::CustomizeDetails(IDetailLayoutBuilder&
         const TSharedRef<SVerticalBox> Items=SNew(SVerticalBox);
         const TSharedPtr<IPropertyHandle> Parent=Layer->GetChildHandle(TEXT("MotionBlocks"));
         const TSharedPtr<IPropertyHandleArray> Array=Parent.IsValid()?Parent->AsArray():nullptr;
+        // Same horizontal native-style axis colors and numeric unit editor as
+        // Formation > Transform > Location. Match Blocks by persistent ID, never array index.
+        auto MakeGroupVelocityRow=[WeakPattern,LayerId,Utilities,OnEdited=OnEdited](FGuid MotionBlockId)->TSharedRef<SWidget>
+        {
+            const TSharedRef<SHorizontalBox> Axes=SNew(SHorizontalBox);
+            // Velocity is cm/s, not centimeters. Keep the numeric editor unitless
+            // to avoid Slate mislabeling a speed as a distance.
+            for(int32 Axis=0;Axis<3;++Axis)
+            {
+                const TSharedRef<TUniquePtr<FScopedTransaction>> DragTransaction=
+                    MakeShared<TUniquePtr<FScopedTransaction>>();
+                const FText AxisTip=FText::Format(LOCTEXT("GroupVelocityAxisTip", "Group velocity {0} axis in cm/s"),
+                    FText::FromString(Axis==0?TEXT("X"):Axis==1?TEXT("Y"):TEXT("Z")));
+                Axes->AddSlot().FillWidth(1.0f).Padding(Axis==0?0.0f:3.0f,0,0,0)
+                [SNew(SHorizontalBox)
+                    +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Fill)
+                        [SNew(SBox).WidthOverride(5).HeightOverride(21)
+                            [SNew(SBorder).BorderImage(FAppStyle::GetBrush(TEXT("WhiteBrush")))
+                                .BorderBackgroundColor(Axis==0?FLinearColor::FromSRGBColor(FColor(0xCB,0x26,0x00)):
+                                    Axis==1?FLinearColor::FromSRGBColor(FColor(0x67,0xA9,0x03)):
+                                        FLinearColor::FromSRGBColor(FColor(0x2B,0x7E,0xEC)))]]
+                    +SHorizontalBox::Slot().FillWidth(1.0f)
+                        [SNew(SNumericEntryBox<double>)
+                            .ToolTipText(AxisTip)
+                            .AllowSpin(true)
+                            .MinDesiredValueWidth(42.0f)
+                            .OnBeginSliderMovement_Lambda([DragTransaction,WeakPattern]()
+                            {
+                                DragTransaction->Reset(new FScopedTransaction(
+                                    LOCTEXT("ScrubGroupVelocity","Scrub Barrage Group Velocity")));
+                                if(UBarragePattern* P=WeakPattern.Get())P->Modify();
+                            })
+                            .OnValueChanged_Lambda([DragTransaction,WeakPattern,LayerId,MotionBlockId,OnEdited=OnEdited,Axis](double NewValue)
+                            {
+                                if(!DragTransaction->Get() || !FMath::IsFinite(NewValue))return;
+                                if(UBarragePattern* P=WeakPattern.Get())
+                                    if(FBarragePatternLayer* L=P->Layers.FindByPredicate(
+                                        [LayerId](const FBarragePatternLayer& Item){return Item.LayerId==LayerId;}))
+                                        if(FBarrageMotionBlock* B=L->MotionBlocks.FindByPredicate(
+                                            [MotionBlockId](const FBarrageMotionBlock& Item){return Item.BlockId==MotionBlockId;}))
+                                        {
+                                            B->GroupTravelVelocity[Axis]=NewValue;
+                                            P->MarkPackageDirty();
+                                            OnEdited.ExecuteIfBound();
+                                        }
+                            })
+                            .OnEndSliderMovement_Lambda([DragTransaction,WeakPattern](double)
+                            {
+                                if(UBarragePattern* P=WeakPattern.Get())P->PostEditChange();
+                                DragTransaction->Reset();
+                            })
+                            .Value_Lambda([WeakPattern,LayerId,MotionBlockId,Axis]()->TOptional<double>
+                            {
+                                const UBarragePattern* P=WeakPattern.Get();
+                                if(!P)return TOptional<double>();
+                                const FBarragePatternLayer* L=P->Layers.FindByPredicate(
+                                    [LayerId](const FBarragePatternLayer& Item){return Item.LayerId==LayerId;});
+                                if(!L)return TOptional<double>();
+                                const FBarrageMotionBlock* B=L->MotionBlocks.FindByPredicate(
+                                    [MotionBlockId](const FBarrageMotionBlock& Item){return Item.BlockId==MotionBlockId;});
+                                return B?TOptional<double>(B->GroupTravelVelocity[Axis]):TOptional<double>();
+                            })
+                            .OnValueCommitted_Lambda([WeakPattern,LayerId,MotionBlockId,Utilities,OnEdited=OnEdited,Axis]
+                                (double NewValue,ETextCommit::Type)
+                            {
+                                if(!FMath::IsFinite(NewValue))return;
+                                if(const UBarragePattern* P=WeakPattern.Get())
+                                    if(const FBarragePatternLayer* L=P->Layers.FindByPredicate(
+                                        [LayerId](const FBarragePatternLayer& Item){return Item.LayerId==LayerId;}))
+                                        if(const FBarrageMotionBlock* B=L->MotionBlocks.FindByPredicate(
+                                            [MotionBlockId](const FBarrageMotionBlock& Item){return Item.BlockId==MotionBlockId;}))
+                                            if(FMath::IsNearlyEqual(B->GroupTravelVelocity[Axis],NewValue,0.00001))return;
+                                EditBlocks(WeakPattern,LayerId,Utilities,
+                                    LOCTEXT("EditGroupVelocity","Edit Barrage Group Velocity"),
+                                    [MotionBlockId,Axis,NewValue](FBarragePatternLayer& L)
+                                    {
+                                        if(FBarrageMotionBlock* B=L.MotionBlocks.FindByPredicate(
+                                            [MotionBlockId](const FBarrageMotionBlock& Item){return Item.BlockId==MotionBlockId;}))
+                                            B->GroupTravelVelocity[Axis]=NewValue;
+                                    },OnEdited);
+                            })]];
+            }
+            return Axes;
+        };
         if(Array.IsValid())
             for(int32 Index=0;Index<Current.MotionBlocks.Num();++Index)
             {
@@ -951,6 +1061,7 @@ void FBarragePatternDetailsCustomization::CustomizeDetails(IDetailLayoutBuilder&
                 const TSharedPtr<IPropertyHandle> Handle=Array->GetElement(Index);
                 if(!Handle.IsValid())continue;
                 const bool bMovement=Block.Kind==EBarrageMotionBlockKind::Movement;
+                const bool bTracker=Block.Kind==EBarrageMotionBlockKind::Tracker;
                 const bool bFirst=Index==0;
                 FCardFields Fields;
                 if(bMovement)
@@ -961,40 +1072,72 @@ void FBarragePatternDetailsCustomization::CustomizeDetails(IDetailLayoutBuilder&
                         Fields.AddChild(Handle,TEXT("bIgnoreGravity"));
                     if(Block.Movement==EBarrageMovementMode::GroupOrbit)
                     {
-                        Fields.AddChild(Handle,TEXT("GroupTravelVelocity"));
-                        Fields.AddChild(Handle,TEXT("TurnRateDegrees"));
-                        Fields.AddChild(Handle,TEXT("GroupReleaseSeconds"));
+                        Fields.AddWidget(LOCTEXT("MotionGroupVelocity","Group Velocity"),
+                            MakeGroupVelocityRow(BlockId),
+                            LOCTEXT("MotionGroupVelocityTip","Local group center velocity (cm/s), X red, Y green, Z blue."));
+                        Fields.Add(Handle->GetChildHandle(TEXT("TurnRateDegrees")),LOCTEXT("MotionTurnRate","Turn Rate"));
+                        Fields.Add(Handle->GetChildHandle(TEXT("GroupReleaseSeconds")),LOCTEXT("MotionGroupRelease","Group Release"));
+                        Fields.AddChild(Handle,TEXT("GroupReleaseRevolutions"));
                     }
                     if(Block.Movement==EBarrageMovementMode::Curved || Block.Movement==EBarrageMovementMode::Orbit)
-                        Fields.AddChild(Handle,TEXT("TurnRateDegrees"));
+                        Fields.Add(Handle->GetChildHandle(TEXT("TurnRateDegrees")),LOCTEXT("MotionTurnRate","Turn Rate"));
                 }
-                else Fields.AddChild(Handle,TEXT("TransitionAgeSeconds"));
+                else if(bTracker)
+                {
+                    Fields.AddChild(Handle,TEXT("TrackerTurnRateDegrees"));
+                    Fields.AddChild(Handle,TEXT("bTrackerPredictLead"),Utilities,true);
+                    if (Block.bTrackerPredictLead)
+                        Fields.AddChild(Handle,TEXT("TrackerMaxLeadSeconds"));
+                }
+                else
+                {
+                    Fields.AddChild(Handle,TEXT("TransitionCondition"));
+                    Fields.AddChild(Handle, Block.TransitionCondition==EBarrageMotionTransitionCondition::Distance
+                        ? TEXT("TransitionDistanceCm") : TEXT("TransitionAgeSeconds"));
+                }
                 FCardActions Actions;
-                Actions.bCanMoveUp=bMovement && Index>=2;
-                Actions.bCanMoveDown=bMovement && Index+2<Current.MotionBlocks.Num();
+                int32 MovementOrdinal=0, MovementCount=0;
+                for(int32 BlockIndex=0;BlockIndex<Current.MotionBlocks.Num();++BlockIndex)
+                    if(Current.MotionBlocks[BlockIndex].Kind==EBarrageMotionBlockKind::Movement)
+                    {
+                        if(BlockIndex<=Index)MovementOrdinal=MovementCount;
+                        ++MovementCount;
+                    }
+                Actions.bCanMoveUp=bMovement && MovementOrdinal>0;
+                Actions.bCanMoveDown=bMovement && MovementOrdinal+1<MovementCount;
                 Actions.bCanRemove=FBarrageAuthoringInteraction::CanRemoveMotionBlock(Current,BlockId);
                 Actions.MoveUp.BindLambda([Edit,BlockId]()
                 {Edit(LOCTEXT("MoveMotionUp","Move Movement Phase"),[BlockId](FBarragePatternLayer& L)
-                    {const int32 I=L.MotionBlocks.IndexOfByPredicate([BlockId](const FBarrageMotionBlock& X)
-                        {return X.BlockId==BlockId;});if(I>=2)L.MotionBlocks.Swap(I,I-2);});});
+                    {FBarrageAuthoringInteraction::MoveMotionPhase(L,BlockId,-1);});});
                 Actions.MoveDown.BindLambda([Edit,BlockId]()
                 {Edit(LOCTEXT("MoveMotionDown","Move Movement Phase"),[BlockId](FBarragePatternLayer& L)
-                    {const int32 I=L.MotionBlocks.IndexOfByPredicate([BlockId](const FBarrageMotionBlock& X)
-                        {return X.BlockId==BlockId;});if(I>=0 && I+2<L.MotionBlocks.Num())L.MotionBlocks.Swap(I,I+2);});});
+                    {FBarrageAuthoringInteraction::MoveMotionPhase(L,BlockId,1);});});
                 Actions.Remove.BindLambda([Edit,BlockId]()
                 {Edit(LOCTEXT("RemoveMotion","Remove Movement and Transition"),[BlockId](FBarragePatternLayer& L)
                     {const int32 I=L.MotionBlocks.IndexOfByPredicate([BlockId](const FBarrageMotionBlock& X)
-                        {return X.BlockId==BlockId;});if(I>=2){L.MotionBlocks.RemoveAt(I);L.MotionBlocks.RemoveAt(I-1);}});});
-                const FText Title=bMovement
-                    ? FText::Format(LOCTEXT("MovementTitle","Phase {0}"),FText::AsNumber(Index/2+1))
-                    : FText::Format(LOCTEXT("TransitionTitle","Transition {0}"),FText::AsNumber((Index+1)/2));
+                        {return X.BlockId==BlockId;});if(I<0)return;
+                     if(L.MotionBlocks[I].Kind==EBarrageMotionBlockKind::Tracker){L.MotionBlocks.RemoveAt(I);return;}
+                     if(I>=1 && L.MotionBlocks[I-1].Kind==EBarrageMotionBlockKind::Transition)
+                     {
+                         int32 End=I+1;
+                         if(End<L.MotionBlocks.Num() && L.MotionBlocks[End].Kind==EBarrageMotionBlockKind::Tracker)++End;
+                         L.MotionBlocks.RemoveAt(I,End-I);
+                         L.MotionBlocks.RemoveAt(I-1);
+                     }});});
+                int32 PhaseOrdinal=0;
+                for(int32 I=0;I<=Index;++I)
+                    if(Current.MotionBlocks[I].Kind==EBarrageMotionBlockKind::Movement)++PhaseOrdinal;
+                const FText Title=bTracker ? LOCTEXT("TrackerCardTitle","Tracker") : bMovement
+                    ? FText::Format(LOCTEXT("MovementTitle","Phase {0}"),FText::AsNumber(PhaseOrdinal))
+                    : FText::Format(LOCTEXT("TransitionTitle","Transition {0}"),FText::AsNumber(PhaseOrdinal));
                 AddCard(Items,MakeCard(Prefix+TEXT("Motion.")+BlockId.ToString(),Title,
-                    bFirst?ECardGuard::Fixed:(bMovement?ECardGuard::Optional:ECardGuard::Paired),Fields,MoveTemp(Actions),Block.bEnabled));
+                    bFirst?ECardGuard::Fixed:(bTracker?ECardGuard::Optional:(bMovement?ECardGuard::Optional:ECardGuard::Paired)),Fields,MoveTemp(Actions),Block.bEnabled));
             }
+        const TArray<FBarrageMotionBlock> MotionMenuBlocks = Current.MotionBlocks;
         const TSharedRef<SWidget> Add=SNew(SComboButton)
             .HasDownArrow(false)
             .ToolTipText(LOCTEXT("AddMotionTip","Add a Movement phase. A Transition is inserted automatically."))
-            .OnGetMenuContent_Lambda([Edit]() -> TSharedRef<SWidget>
+            .OnGetMenuContent_Lambda([Edit,MotionMenuBlocks]() -> TSharedRef<SWidget>
             {
                 FMenuBuilder Menu(true,nullptr);
                 for(EBarrageMovementMode Mode:{EBarrageMovementMode::Profile})
@@ -1005,7 +1148,11 @@ void FBarragePatternDetailsCustomization::CustomizeDetails(IDetailLayoutBuilder&
                         {
                             Edit(LOCTEXT("AddMotionTx","Add Motion Phase"),[Mode](FBarragePatternLayer& L)
                             {
-                                if(L.MotionBlocks.Num()>=FBarrageMotionProgram::MaxPhases*2-1)return;
+                                if(L.MotionBlocks.Num()>=FBarrageMotionProgram::MaxPhases*3-2)return;
+                                int32 PhaseCount=0;
+                                for(const FBarrageMotionBlock& B:L.MotionBlocks)
+                                    if(B.Kind==EBarrageMotionBlockKind::Movement)++PhaseCount;
+                                if(PhaseCount>=FBarrageMotionProgram::MaxPhases)return;
                                 FBarrageMotionBlock Transition;Transition.BlockId=FGuid::NewGuid();
                                 Transition.Kind=EBarrageMotionBlockKind::Transition;
                                 float LastAge=0.0f;
@@ -1017,6 +1164,30 @@ void FBarragePatternDetailsCustomization::CustomizeDetails(IDetailLayoutBuilder&
                                 Movement.Movement=Mode;
                                 L.MotionBlocks.Add(Movement);
                             });
+                        })));
+                }
+                Menu.AddMenuSeparator();
+                int32 PhaseNumber = 0;
+                for (const FBarrageMotionBlock& Phase : MotionMenuBlocks)
+                {
+                    if (Phase.Kind != EBarrageMotionBlockKind::Movement) continue;
+                    ++PhaseNumber;
+                    if (Phase.Movement != EBarrageMovementMode::Profile && Phase.Movement != EBarrageMovementMode::Curved &&
+                        Phase.Movement != EBarrageMovementMode::GroupOrbit)
+                        continue;
+                    const FGuid PhaseId = Phase.BlockId;
+                    const int32 PhaseIndex = MotionMenuBlocks.IndexOfByPredicate([PhaseId](const FBarrageMotionBlock& Block)
+                    { return Block.BlockId == PhaseId; });
+                    if (MotionMenuBlocks.IsValidIndex(PhaseIndex+1) &&
+                        MotionMenuBlocks[PhaseIndex+1].Kind == EBarrageMotionBlockKind::Tracker) continue;
+                    Menu.AddMenuEntry(
+                        FText::Format(LOCTEXT("AddTrackerToPhase","Tracker on Phase {0}"),FText::AsNumber(PhaseNumber)),
+                        LOCTEXT("AddTrackerToPhaseTip","Insert a Tracker immediately after this Movement Phase, preserving the adjoining Transition."),
+                        FSlateIcon(FBarrageEditorStyle::StyleName(),TEXT("Barrage.Menu.Phase")),
+                        FUIAction(FExecuteAction::CreateLambda([Edit,PhaseId]()
+                        {
+                            Edit(LOCTEXT("AddTrackerTx","Add Tracker"),[PhaseId](FBarragePatternLayer& L)
+                            { FBarrageAuthoringInteraction::InsertTrackerForPhase(L,PhaseId); });
                         })));
                 }
                 return Menu.MakeWidget();

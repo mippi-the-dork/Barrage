@@ -1,6 +1,7 @@
 #include "BarrageEmissionStack.h"
 #include "BarrageFormationStack.h"
 #include "Math/RandomStream.h"
+#include <cfloat>
 
 namespace
 {
@@ -147,10 +148,21 @@ bool FBarrageEmissionStackCompiler::Apply(const FBarragePatternLayer& L,
             if (int64(Num)*2 > Budget) return Fail(Error,TEXT("Emission: Ping Pong exceeds shot budget."));
             const TArray<FBarragePatternEmission> Input=InOut;
             InOut.Reserve(Num*2);
+            double FirstTime = DBL_MAX, LastTime = 0.0;
+            for (const FBarragePatternEmission& Shot : Input)
+            {
+                FirstTime = FMath::Min(FirstTime, double(Shot.TimeSeconds));
+                LastTime = FMath::Max(LastTime, double(Shot.TimeSeconds));
+            }
+            double PreviousReturnTime = LastTime + B.IntervalSeconds;
             for(int32 I=Num-1;I>=0;--I)
             {
                 FBarragePatternEmission Shot=Input[I];
-                const double Time=double(Shot.TimeSeconds)+B.IntervalSeconds;
+                // Preserve reverse-shot order even if an earlier operator has
+                // shuffled or jittered source times. The return clock never runs backwards.
+                const double Time = FMath::Max(PreviousReturnTime,
+                    LastTime + B.IntervalSeconds + (LastTime - double(Shot.TimeSeconds)));
+                PreviousReturnTime = Time;
                 if (!FMath::IsFinite(Time) || Time>86400.0) return Fail(Error,TEXT("Emission: Ping Pong time exceeds duration."));
                 Shot.TimeSeconds=float(Time);
                 InOut.Add(MoveTemp(Shot));

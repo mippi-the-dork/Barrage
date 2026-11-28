@@ -109,7 +109,7 @@ struct BARRAGERUNTIME_API FBarrageEmissionBlock
     UPROPERTY() FGuid BlockId;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block") bool bEnabled = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block") EBarrageEmissionBlockKind Kind = EBarrageEmissionBlockKind::Instant;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(ClampMin="0", ToolTip="Seconds between successive samples, groups, or full repeated waves.", Units="s")) float IntervalSeconds = 0.25f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(DisplayName="Interval", ClampMin="0", ToolTip="Seconds between successive samples, groups, or full repeated waves.", Units="s")) float IntervalSeconds = 0.25f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(ClampMin="1")) int32 GroupSize = 4;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(ClampMin="1")) int32 RepeatCount = 2;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(ClampMin="1", ClampMax="128")) int32 ArmCount = 4;
@@ -154,7 +154,8 @@ UENUM(BlueprintType)
 enum class EBarrageMotionBlockKind : uint8
 {
     Movement UMETA(DisplayName="Movement"),
-    Transition UMETA(DisplayName="Transition")
+    Transition UMETA(DisplayName="Transition"),
+    Tracker UMETA(DisplayName="Tracker")
 };
 USTRUCT(BlueprintType)
 struct BARRAGERUNTIME_API FBarrageMotionBlock
@@ -164,13 +165,19 @@ struct BARRAGERUNTIME_API FBarrageMotionBlock
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block") bool bEnabled = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block") EBarrageMotionBlockKind Kind = EBarrageMotionBlockKind::Movement;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block") EBarrageMovementMode Movement = EBarrageMovementMode::Profile;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(ToolTip="Angular velocity for Curved/Orbit movement.", Units="deg/s")) float TurnRateDegrees = 90.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(DisplayName="Turn Rate", ToolTip="Signed angular velocity: positive and negative rotate in opposite directions.", Units="deg/s")) float TurnRateDegrees = 90.0f;
     // Phase-local launch-speed multiplier. Gravity acceleration is not scaled.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(ClampMin="0.05", ClampMax="10.0", ToolTip="Multiply projectile velocity during this Movement Phase. Restores the unscaled trajectory when the next Phase begins.")) float SpeedMultiplier = 1.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(ToolTip="Ignore profile gravity during this Movement Phase. Later Profile phases can restore gravity.")) bool bIgnoreGravity = false;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(Units="cm/s", ToolTip="Local-space velocity of the invisible formation center, independent of its rotation.")) FVector GroupTravelVelocity = FVector::ZeroVector;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(Units="s", ClampMin="0", ToolTip="Seconds after formation activation until all members release into tangential flight. Zero means no automatic release.")) float GroupReleaseSeconds = 0.0f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(ClampMin="0", ToolTip="Absolute age since projectile spawn at which the following Movement Block takes over.", Units="s")) float TransitionAgeSeconds = 1.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(DisplayName="Group Velocity", Units="cm/s", ToolTip="Local-space velocity of the invisible formation center, independent of its rotation.")) FVector GroupTravelVelocity = FVector::ZeroVector;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(DisplayName="Group Release", Units="s", ClampMin="0", ToolTip="Seconds after formation activation until all members release into tangential flight. Zero means no time-based release. When revolutions are also set, the earlier release wins.")) float GroupReleaseSeconds = 0.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(DisplayName="Release Revolutions", ClampMin="0", ToolTip="Release after this many full rotations of the formation. Zero disables rotational release. When Group Release is also set, whichever occurs first releases the group. Requires a nonzero Turn Rate.")) float GroupReleaseRevolutions = 0.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(DisplayName="Turn Rate", ClampMin="0", ClampMax="1080", Units="deg/s", ToolTip="Maximum steering rotation per second toward a live actor or an authored target snapshot. Zero turns instantly.")) float TrackerTurnRateDegrees = 180.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(DisplayName="Predict Lead", ToolTip="Predict where a moving Target Actor will be when the projectile can intercept it. Uses target velocity and projectile speed; with a stationary target or no valid intercept, falls back to direct aiming.")) bool bTrackerPredictLead = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(DisplayName="Maximum Lead", EditCondition="bTrackerPredictLead", ClampMin="0.01", ClampMax="10", Units="s", ToolTip="Maximum future target prediction horizon. Limits extreme leads when targets move quickly or are far away.")) float TrackerMaxLeadSeconds = 2.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(ToolTip="Transition at absolute projectile age or cumulative traveled distance since spawn.")) EBarrageMotionTransitionCondition TransitionCondition = EBarrageMotionTransitionCondition::Age;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(ClampMin="0", ToolTip="Absolute projectile age when the following Movement takes over. For Group Orbit, this is shared formation age since its first emission; attached members release together.", Units="s")) float TransitionAgeSeconds = 1.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Block", meta=(ClampMin="0.01", ToolTip="Cumulative path traveled since spawn; includes turns, not straight-line displacement.", Units="cm")) float TransitionDistanceCm = 500.0f;
 };
 
 USTRUCT(BlueprintType)

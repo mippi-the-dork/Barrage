@@ -38,6 +38,10 @@ struct FBarrageAuthoringInteraction
     static bool CanRemoveFormationBlock(const FBarragePatternLayer& Layer, FGuid BlockId);
     static bool CanRemoveEmissionBlock(const FBarragePatternLayer& Layer, FGuid BlockId);
     static bool CanRemoveMotionBlock(const FBarragePatternLayer& Layer, FGuid BlockId);
+    // Move a complete Movement phase (and its Tracker, if any) across a neighboring
+    // Transition. This preserves Block identities and the adjacent Transition thresholds.
+    static bool MoveMotionPhase(FBarragePatternLayer& Layer, FGuid MovementBlockId, int32 Direction);
+    static bool InsertTrackerForPhase(FBarragePatternLayer& Layer, FGuid MovementBlockId);
     static int32 DuplicateLayer(UBarragePattern* Pattern, int32 SelectedLayer);
     static bool DeleteLayer(UBarragePattern* Pattern, int32 LayerIndex);
     static int32 ShiftLayer(UBarragePattern* Pattern, int32 LayerIndex, int32 Direction);

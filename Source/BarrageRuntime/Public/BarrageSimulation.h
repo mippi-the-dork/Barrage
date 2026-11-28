@@ -66,6 +66,12 @@ class BARRAGERUNTIME_API FBarrageSimulation
 public:
     using FGravitySampler = TFunction<FVector(const FVector&)>;
     using FCollisionSampler = TFunction<bool(const FBarrageCollisionQuery&, FBarrageCollisionHit&)>;
+    // Pure steering primitive, independent of UWorld. Rate==0 means snap to target.
+    static FVector SteerToward(const FVector& Velocity, const FVector& Position, const FVector& Target, double TurnRateDegrees, double Seconds);
+    // Solves constant-velocity interception with a bounded time horizon. Returns
+    // the live position if no positive intercept exists or inputs are invalid.
+    static FVector PredictInterceptTarget(const FVector& ProjectilePosition, double ProjectileSpeed,
+        const FVector& TargetPosition, const FVector& TargetVelocity, double MaxLeadSeconds);
 
     FBarrageProjectileHandle Spawn(const FBarrageSpawnParams& Params, const FVector& InitialProviderAcceleration = FVector::ZeroVector);
     bool Destroy(const FBarrageProjectileHandle& Handle);
@@ -73,12 +79,15 @@ public:
     void Step(float StepSeconds, const FVector& WorldAcceleration, const FGravitySampler& ProviderSampler,
         TArray<FBarrageImpactRecord>* OutImpacts = nullptr, const FCollisionSampler& CollisionSampler = FCollisionSampler(),
         FBarrageStepMetrics* OutMetrics = nullptr, TArray<FBarrageRemovalRecord>* OutRemovals = nullptr);
+    // Deterministic path length for constant-acceleration segments; shared with Travel Preview.
+    static double IntegrateTravelDistance(const FVector& Velocity, const FVector& Acceleration, double Seconds);
     // Constant angular rate around a fixed axis. Used by runtime and editor preview.
     static FVector AdvanceCurvedFlight(const FVector& Velocity, const FVector& Axis, double RateDegrees, double Seconds, FVector& OutVelocity);
     void Clear();
     int32 Num() const { return Positions.Num(); }
     FVector GetPositionAt(int32 DenseIndex) const { return Positions.IsValidIndex(DenseIndex) ? Positions[DenseIndex] : FVector::ZeroVector; }
     FVector GetVelocityAt(int32 DenseIndex) const { return Velocities.IsValidIndex(DenseIndex) ? Velocities[DenseIndex] : FVector::ZeroVector; }
+    FVector GetFacingAt(int32 DenseIndex) const { return FacingDirections.IsValidIndex(DenseIndex) ? FacingDirections[DenseIndex] : FVector::ForwardVector; }
     int32 GetRenderStyleAt(int32 DenseIndex) const { return RenderStyleIds.IsValidIndex(DenseIndex) ? RenderStyleIds[DenseIndex] : 0; }
     float GetRenderScaleAt(int32 DenseIndex) const { return RenderScales.IsValidIndex(DenseIndex) ? RenderScales[DenseIndex] : 1.0f; }
 private:
@@ -86,6 +95,7 @@ private:
     TArray<FVector> Positions;
     TArray<FVector> PreviousPositions;
     TArray<FVector> Velocities;
+    TArray<FVector> FacingDirections;
     TArray<FVector> Accelerations;
     TArray<EBarrageGravityMode> Modes;
     TArray<EBarrageMotionMode> Motions;
@@ -97,10 +107,19 @@ private:
         float TurnRateDegrees = 0.0f;
         float ReleaseSeconds = 0.0f;
         float ClockOffsetSeconds = 0.0f;
-        int32 Identity = INDEX_NONE;
+        int64 Identity = INDEX_NONE;
         bool bActive = false;
     };
     TArray<FGroupOrbitMember> GroupMembers;
+    // Only tracked groups allocate a shared steering state, never per-projectile Actors.
+    // Identity is scoped to a Pattern invocation and Layer by the playback compiler.
+    struct FTrackedGroupCenter
+    {
+        FVector Center = FVector::ZeroVector;
+        FVector Velocity = FVector::ZeroVector;
+        double ClockSeconds = 0.0;
+    };
+    TMap<int64, FTrackedGroupCenter> TrackedGroupCenters;
     TArray<FVector> OrbitCenters;
     TArray<FVector> OrbitAxes;
     TArray<float> OrbitRates;
@@ -115,7 +134,11 @@ private:
     TArray<FVector> TransitionLaunchVelocities;
     TArray<EBarrageGravityMode> TransitionGravityModes;
     TArray<FBarrageMotionProgram> MotionPrograms;
+    TArray<TWeakObjectPtr<AActor>> TrackerTargetActors;
+    TArray<FVector> TrackerTargetPositions;
+    TArray<uint8> TrackerHasTarget;
     TArray<uint8> MotionPhaseIndices;
+    TArray<double> MotionTravelDistances;
     TArray<FVector> MotionLaunchVelocities;
     TArray<EBarrageGravityMode> MotionProfileGravity;
     TArray<FVector> MotionProfileAcceleration;

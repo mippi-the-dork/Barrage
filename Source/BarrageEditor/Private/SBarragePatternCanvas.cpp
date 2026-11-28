@@ -21,6 +21,10 @@ FReply SBarragePatternCanvas::OnMouseWheel(const FGeometry&, const FPointerEvent
 
 FReply SBarragePatternCanvas::OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& Event)
 {
+    // Slate capture is widget-wide, not per button. Do not start another drag
+    // while an existing button owns the capture (RMB pan + LMB orbit froze it).
+    if (bPanDragging || bOrbitDragging || DraggingHandle != EBarragePreviewHandle::None)
+        return FReply::Handled();
     if (Event.GetEffectingButton() == EKeys::RightMouseButton)
     {
         bPanDragging = true;
@@ -229,6 +233,58 @@ int32 SBarragePatternCanvas::OnPaint(const FPaintArgs&, const FGeometry& Geo,
     Stroke(Origin, AxisY, FLinearColor(0.35f,0.8f,0.35f,0.65f), 1.2f, LayerId);
     Stroke(Origin, AxisZ, FLinearColor(0.35f,0.55f,0.95f,0.65f), 1.2f, LayerId);
 
+    // Editor-only target capsule: render in all camera projections using the
+    // same world-to-screen transform as the projectiles and viewport handles.
+    if (Model->GetTarget().bEnabled)
+    {
+        const FBarragePreviewTarget& Target = Model->GetTarget();
+        const FVector Center = Target.PositionAt(Time);
+        const double Radius = Target.CapsuleRadiusCm;
+        const double StraightHalf = FMath::Max(0.0, double(Target.CapsuleHalfHeightCm) - Radius);
+        const FLinearColor CapsuleColor = Model->CountTargetHitsThrough(Time) > 0
+            ? FLinearColor(1.0f, 0.45f, 0.22f, 0.9f)
+            : FLinearColor(0.95f, 0.75f, 0.3f, 0.85f);
+        if (Target.bPingPong)
+        {
+            FVector Previous = Target.PositionAt(0.0);
+            const double Period = 4.0 * Target.HalfRangeCm / FMath::Max(1.0f, Target.SpeedCmPerSecond);
+            for (int32 K = 1; K <= 40; ++K)
+            {
+                const FVector Next = Target.PositionAt(Period * K / 40.0);
+                Stroke(Screen(Previous), Screen(Next),
+                    FLinearColor(CapsuleColor.R, CapsuleColor.G, CapsuleColor.B, 0.22f), 1.0f, LayerId + 1);
+                Previous = Next;
+            }
+        }
+        // The cylindrical sides and hemisphere caps form a projected wire capsule.
+        for (int32 K = 0; K < 16; ++K)
+        {
+            const double A = 2.0 * PI * K / 16.0;
+            const double B = 2.0 * PI * (K + 1) / 16.0;
+            const FVector RA(Radius * FMath::Cos(A), Radius * FMath::Sin(A), 0.0);
+            const FVector RB(Radius * FMath::Cos(B), Radius * FMath::Sin(B), 0.0);
+            Stroke(Screen(Center + RA + FVector(0,0,StraightHalf)),
+                Screen(Center + RB + FVector(0,0,StraightHalf)), CapsuleColor, 1.5f, LayerId+2);
+            Stroke(Screen(Center + RA - FVector(0,0,StraightHalf)),
+                Screen(Center + RB - FVector(0,0,StraightHalf)), CapsuleColor, 1.5f, LayerId+2);
+            if (K % 4 == 0)
+                Stroke(Screen(Center + RA + FVector(0,0,StraightHalf)),
+                    Screen(Center + RA - FVector(0,0,StraightHalf)), CapsuleColor, 1.2f, LayerId+2);
+        }
+        // Visible cap silhouettes in side projections.
+        for (int32 K = 0; K < 12; ++K)
+        {
+            const double A = PI * K / 12.0;
+            const double B = PI * (K + 1) / 12.0;
+            for (int32 Sign : {-1, 1})
+            {
+                const FVector RA(Radius * FMath::Cos(A), 0.0, Sign * (StraightHalf + Radius * FMath::Sin(A)));
+                const FVector RB(Radius * FMath::Cos(B), 0.0, Sign * (StraightHalf + Radius * FMath::Sin(B)));
+                Stroke(Screen(Center + RA), Screen(Center + RB), CapsuleColor, 1.2f, LayerId+2);
+            }
+        }
+    }
+
     for (int32 I = 0; I < VisibleCount; ++I)
     {
         const FBarragePreviewPoint& P = Points[I];
@@ -267,6 +323,16 @@ int32 SBarragePatternCanvas::OnPaint(const FPaintArgs&, const FGeometry& Geo,
             bActive ? 2.0f : 1.0f, LayerId + 2);
         Stroke(V + FVector2D(-CrossSize,CrossSize), V + FVector2D(CrossSize,-CrossSize), Color,
             bActive ? 2.0f : 1.0f, LayerId + 2);
+        const double ImpactTime = Model->GetImpactTime(I);
+        if (bFlightView && ImpactTime >= 0.0 && Time >= ImpactTime && Time - ImpactTime < 0.20)
+        {
+            const FVector2D ImpactScreen = Screen(Model->EvaluatePosition(I, ImpactTime));
+            const float Flash = 7.0f + static_cast<float>((Time - ImpactTime) * 20.0);
+            Stroke(ImpactScreen + FVector2D(-Flash,0), ImpactScreen + FVector2D(Flash,0),
+                FLinearColor(1.0f,0.32f,0.16f,1.0f), 2.0f, LayerId+3);
+            Stroke(ImpactScreen + FVector2D(0,-Flash), ImpactScreen + FVector2D(0,Flash),
+                FLinearColor(1.0f,0.32f,0.16f,1.0f), 2.0f, LayerId+3);
+        }
     }
     // Interactive authoring handles. Green = selected layer position, orange = Radius,
     // purple = angular span. Nothing is persisted except an actual drag transaction.

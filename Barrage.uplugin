@@ -1,7 +1,7 @@
 {
   "FileVersion": 3,
-  "Version": 43,
-  "VersionName": "0.4.0-dev43",
+  "Version": 560,
+  "VersionName": "0.4.0-dev56",
   "FriendlyName": "Barrage",
   "Description": "Block-first high-density projectile pattern authoring and CPU simulation.",
   "Category": "Gameplay",

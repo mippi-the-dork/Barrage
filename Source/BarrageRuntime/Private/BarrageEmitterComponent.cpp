@@ -62,9 +62,9 @@ bool UBarrageEmitterComponent::Play()
     });
     FBarragePlaybackHandle Handle;
     if (Content == EBarrageEmitterContent::Pattern)
-        Handle = Barrage->StartPatternTracked(Pattern, Origin, bHasTarget, Target, Source, bIgnoreOwnerForCollision);
+        Handle = Barrage->StartPatternTracked(Pattern, Origin, bHasTarget, Target, Source, bIgnoreOwnerForCollision, TargetActor.Get());
     else if (Content == EBarrageEmitterContent::Sequence)
-        Handle = Barrage->StartSequenceTracked(Sequence, Origin, bHasTarget, Target, Source, bIgnoreOwnerForCollision);
+        Handle = Barrage->StartSequenceTracked(Sequence, Origin, bHasTarget, Target, Source, bIgnoreOwnerForCollision, TargetActor.Get());
     if (!Handle.IsSet()) return false;
     if (Barrage->IsPlaybackActive(Handle)) OwnedSchedules.Add(Handle);
     return true;

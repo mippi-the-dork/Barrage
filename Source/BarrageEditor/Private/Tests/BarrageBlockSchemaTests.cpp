@@ -273,3 +273,29 @@ bool FBarrageSchemaEmptyPattern::RunTest(const FString&)
     return true;
 }
 #endif
+
+#if WITH_DEV_AUTOMATION_TESTS
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBarrageGroupTravelVectorAxisSchema,
+    "Barrage.Editor.UX.GroupTravelVelocityAxisSchema", BarrageBlockSchemaTests::Flags)
+bool FBarrageGroupTravelVectorAxisSchema::RunTest(const FString&)
+{
+    // The custom Block-card editor resolves the vector's X/Y/Z native child
+    // handles. Verify the reflected field really is FVector with those axes.
+    const FProperty* Field = FBarrageMotionBlock::StaticStruct()->FindPropertyByName(
+        TEXT("GroupTravelVelocity"));
+    const FStructProperty* VectorField = CastField<FStructProperty>(Field);
+    if (!TestNotNull(TEXT("Group Travel Velocity is a reflected vector field"), VectorField))
+        return false;
+    if (!TestTrue(TEXT("Native FVector type"),
+        VectorField->Struct == TBaseStructure<FVector>::Get())) return false;
+    for (const TCHAR* Axis : {TEXT("X"), TEXT("Y"), TEXT("Z")})
+    {
+        const FProperty* AxisField = VectorField->Struct->FindPropertyByName(FName(Axis));
+        TestNotNull(*FString::Printf(TEXT("Native %s axis exists"), Axis), AxisField);
+        TestTrue(*FString::Printf(TEXT("%s axis is numeric"), Axis),
+            CastField<FFloatProperty>(AxisField) != nullptr ||
+            CastField<FDoubleProperty>(AxisField) != nullptr);
+    }
+    return true;
+}
+#endif

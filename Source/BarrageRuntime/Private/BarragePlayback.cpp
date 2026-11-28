@@ -1,4 +1,5 @@
 #include "BarragePlayback.h"
+#include "BarrageAimMath.h"
 #include "BarrageFormationStack.h"
 #include "BarrageEmissionStack.h"
 #include "BarrageStackPrograms.h"
@@ -45,7 +46,16 @@ bool FBarragePatternCompiler::AppendPattern(const UBarragePattern* Pattern, cons
             const FBarragePatternEmission& E = Generated[I];
             FBarrageScheduledShot& Shot = Out.Shots.AddDefaulted_GetRef();
             Shot.Profile = Profile;
-            Shot.WorldDirection = WorldTransform.GetRotation().RotateVector(E.LocalDirection).GetSafeNormal(UE_SMALL_NUMBER, FVector::ForwardVector);
+            Shot.AuthoredWorldDirection = WorldTransform.GetRotation().RotateVector(E.LocalDirection).GetSafeNormal(UE_SMALL_NUMBER, FVector::ForwardVector);
+            Shot.AimStrength = (Settings.bAimAtTarget && bHasTarget && E.AnchorIndex == INDEX_NONE && ExternalAnchor == INDEX_NONE && !E.bOrbit)
+                ? Settings.AimStrength : 0.0f;
+            Shot.WorldDirection = Shot.AuthoredWorldDirection;
+            if (Shot.AimStrength > 0.0f)
+            {
+                const FVector SpawnPosition = WorldTransform.TransformPosition(E.LocalPosition);
+                const FVector Toward = (TargetWorld - SpawnPosition).GetSafeNormal(UE_SMALL_NUMBER, Shot.AuthoredWorldDirection);
+                Shot.WorldDirection = BarrageAimMath::BlendDirections(Shot.AuthoredWorldDirection, Toward, Shot.AimStrength);
+            }
             Shot.OrbitCenter = WorldTransform.GetLocation();
             Shot.OrbitAxis = WorldTransform.GetRotation().RotateVector(FVector::UpVector).GetSafeNormal(UE_SMALL_NUMBER, FVector::UpVector);
             Shot.WorldPosition = E.AnchorIndex == INDEX_NONE ? WorldTransform.TransformPosition(E.LocalPosition)
@@ -65,29 +75,74 @@ bool FBarragePatternCompiler::AppendPattern(const UBarragePattern* Pattern, cons
             Shot.bStationary = E.bStationary;
             Shot.bCurved = E.bCurved;
             Shot.MotionProgram = Program;
+            Shot.bHasTrackerTarget = bHasTarget;
+            Shot.TrackerTargetPosition = TargetWorld;
             if (InitialMotion.Movement == EBarrageMovementMode::GroupOrbit)
             {
                 // One kinematic frame per Layer invocation. All members share the
                 // same world-space center and clock, including staggered emissions.
                 Shot.bGroupOrbit = true;
                 Shot.GroupIdentity = InvocationId * 256 + LayerIndex;
-                Shot.GroupTravelVelocity = WorldTransform.TransformVectorNoScale(InitialMotion.GroupTravelVelocity);
+                Shot.GroupTravelVelocity = WorldTransform.TransformVectorNoScale(InitialMotion.GroupTravelVelocity) * InitialMotion.SpeedMultiplier;
                 Shot.GroupTurnRateDegrees = InitialMotion.TurnRateDegrees;
                 Shot.GroupReleaseSeconds = InitialMotion.GroupReleaseSeconds;
+                // Convert authored turns into an absolute clock time at compile time.
+                // No additional runtime per-projectile state or branch is required.
+                if (InitialMotion.GroupReleaseRevolutions > 0.0f &&
+                    !FMath::IsNearlyZero(InitialMotion.TurnRateDegrees))
+                {
+                    const double TurnSeconds = 360.0 * double(InitialMotion.GroupReleaseRevolutions) /
+                        FMath::Abs(double(InitialMotion.TurnRateDegrees));
+                    if (!FMath::IsFinite(TurnSeconds) || TurnSeconds > FLT_MAX)
+                        return false;
+                    if (Shot.GroupReleaseSeconds <= 0.0f || TurnSeconds < double(Shot.GroupReleaseSeconds))
+                        Shot.GroupReleaseSeconds = float(TurnSeconds);
+                }
                 Shot.GroupClockOffsetSeconds = E.TimeSeconds - EarliestEmission;
-                Shot.MotionProgram.NumPhases = 0; // analytic Group Orbit fast path
+                // Group Orbit is controlled by one shared clock. A transition
+                // age on its opening phase is the age of that common formation,
+                // measured from the first emission. All members detach together,
+                // including staggered shots still attached at that time.
+                // A previously configured time/revolution release still wins.
+                if (Program.NumPhases >= 2)
+                {
+                    const float PhaseRelease = Program.Phases[0].EndAgeSeconds;
+                    if (!FMath::IsFinite(PhaseRelease)) return false;
+                    if (Shot.GroupReleaseSeconds <= 0.0f || PhaseRelease < Shot.GroupReleaseSeconds)
+                        Shot.GroupReleaseSeconds = PhaseRelease;
+                }
+                if (Program.NumPhases == 1 && !Program.Phases[0].bTracker)
+                    Shot.MotionProgram.NumPhases = 0; // ordinary Group Orbit remains on the analytic fast path
             }
-            // Orbit remains the dedicated analytic orbital simulation until it
-            // supports transitions using an orbital anchor as a phase input.
+            // Standalone Orbit retains its analytic center-relative path until
+            // the first authored Age transition. The transition, rather than
+            // the legacy preset release setting, owns its release clock.
+            if (InitialMotion.Movement == EBarrageMovementMode::Orbit)
+            {
+                // Speed Multiplier scales orbit angular velocity for both
+                // standalone orbit and orbit-to-free-flight handoffs.
+                Shot.OrbitDegreesPerSecond = InitialMotion.TurnRateDegrees * InitialMotion.SpeedMultiplier;
+                if (Program.NumPhases >= 2)
+                    Shot.OrbitReleaseAgeSeconds = Program.Phases[0].EndAgeSeconds;
+                else
+                    Shot.MotionProgram.NumPhases = 0; // standalone analytic orbit
+            }
             if (Program.NumPhases == 1 && FMath::IsNearlyEqual(Program.Phases[0].SpeedMultiplier, 1.0f)
-                && !Program.Phases[0].bIgnoreGravity)
+                && !Program.Phases[0].bIgnoreGravity && !Program.Phases[0].bTracker)
                 Shot.MotionProgram.NumPhases = 0; // fast path: compiled single phase needs no per-step program interpreter
             Shot.StationaryReleaseAgeSeconds = 0.0f;
             Shot.MovementTransitionAgeSeconds = 0.0f;
             Shot.MovementTransitionTo = EBarrageTransitionMovement::Profile;
             Shot.TransitionTurnRateDegrees = 0.0f;
-            Shot.OrbitDegreesPerSecond = E.OrbitDegreesPerSecond;
-            Shot.OrbitReleaseAgeSeconds = E.OrbitReleaseSeconds;
+            if (InitialMotion.Movement != EBarrageMovementMode::Orbit)
+            {
+                Shot.OrbitDegreesPerSecond = E.OrbitDegreesPerSecond;
+                Shot.OrbitReleaseAgeSeconds = E.OrbitReleaseSeconds;
+            }
+            else if (Program.NumPhases < 2)
+            {
+                Shot.OrbitReleaseAgeSeconds = E.OrbitReleaseSeconds;
+            }
         }
         return true;
     };
@@ -141,11 +196,15 @@ bool FBarragePatternCompiler::AppendPattern(const UBarragePattern* Pattern, cons
         float DelaySeconds=0.0f;
         for (const FBarrageActivationBlock& B:L.ActivationBlocks)
             if (B.bEnabled && B.Kind==EBarrageActivationBlockKind::Delay)
-                DelaySeconds=B.DelaySeconds;
+                DelaySeconds+=B.DelaySeconds;
         int32 EveryNth=1;
         for (const FBarrageActivationBlock& B:L.ActivationBlocks)
             if (B.bEnabled && B.Kind==EBarrageActivationBlockKind::Filter)
-                EveryNth=B.EveryNth;
+            {
+                int32 A = EveryNth, C = B.EveryNth;
+                while (C != 0) { const int32 R = A % C; A = C; C = R; }
+                EveryNth = int32(int64(EveryNth) / A * B.EveryNth);
+            }
         int32 ScheduledActivationOrdinal=0;
         auto KeepScheduled=[&]() -> bool
         {

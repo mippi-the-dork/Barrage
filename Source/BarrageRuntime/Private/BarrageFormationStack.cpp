@@ -63,6 +63,8 @@ namespace
 
 bool FBarrageFormationStackCompiler::Validate(const FBarragePatternLayer& Layer, FString* Error)
 {
+    if (!FMath::IsFinite(Layer.Settings.AimStrength) || Layer.Settings.AimStrength < 0.0f || Layer.Settings.AimStrength > 1.0f)
+        return Fail(Error, TEXT("Formation / Aim Strength: expected a value from 0 to 1."));
     if (!Layer.LocalTransform.IsValid()) return Fail(Error,TEXT("Formation / Transform: invalid transform."));
     if (Layer.FormationBlocks.IsEmpty() || Layer.FormationBlocks.Num() > MaxBlocks)
         return Fail(Error,TEXT("Formation / Blocks: add at least one generator; maximum 64 blocks."));
@@ -159,6 +161,10 @@ bool FBarrageFormationStackCompiler::Generate(const FBarragePatternLayer& Layer,
         return Fail(Error,TEXT("Formation: invalid target or emission budget."));
 
     const FBarragePatternSettings& Settings = Layer.Settings;
+    // Aim is evaluated after Emission operations, using each final shot position and direction.
+    // Preserve the authored Direction and Formation Blocks. Target aiming is a
+    // final, uniform rotation of the directions, never a per-shot replacement.
+    bHasTarget = false;
     int32 GeneratorCount=0;
     int64 TotalWeight=0;
     for (const FBarrageFormationBlock& B : Layer.FormationBlocks)

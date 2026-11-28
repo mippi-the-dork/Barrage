@@ -6,6 +6,7 @@
 #include "EditorUndoClient.h"
 #include "BarragePatternLibrary.h"
 #include "BarrageAuthoringInteraction.h"
+#include "BarragePatternPreviewModel.h"
 #include "Widgets/Input/SEditableTextBox.h"
 
 class UBarragePattern;
@@ -40,6 +41,7 @@ private:
     int32 SelectedLayer = INDEX_NONE;
     TSet<int32> MutedLayers;
     float PlaybackRate = 1.0f;
+    FBarragePreviewTarget PreviewTarget{true};
     double PreviewTimeSeconds = 0.0;
     int32 SelectedPlane = 3;
     float PulseSeconds = 0.35f;

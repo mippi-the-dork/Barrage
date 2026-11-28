@@ -3,6 +3,7 @@
 #include "BarrageAssets.h"
 #include "BarragePlayback.h"
 #include "BarrageAuthoringInteraction.h"
+#include "BarrageStackPrograms.h"
 #include "BarragePatternPreviewModel.h"
 #include "BarragePatternParameterPolicy.h"
 #include "BarragePreviewVisuals.h"
@@ -308,4 +309,69 @@ bool FBarrageSplitChildRelevance::RunTest(const FString&)
     TestTrue(TEXT("Both Layer profiles represented"),bFoundParent&&bFoundChild);
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBarrageTrackerPhaseInsertion50,
+    "Barrage.Editor.UX.TrackerOnEarlierPhase", BarrageAuthoringTests::Flags)
+bool FBarrageTrackerPhaseInsertion50::RunTest(const FString&)
+{
+    FBarragePatternLayer Layer;
+    FBarrageMotionBlock First, Second, Transition;
+    First.Kind = EBarrageMotionBlockKind::Movement;
+    First.Movement = EBarrageMovementMode::Profile;
+    First.BlockId = FGuid::NewGuid();
+    Second = First; Second.BlockId = FGuid::NewGuid();
+    Transition.Kind = EBarrageMotionBlockKind::Transition;
+    Transition.BlockId = FGuid::NewGuid(); Transition.TransitionAgeSeconds = 1.0f;
+    Layer.MotionBlocks = {First,Transition,Second};
+    TestTrue(TEXT("Can add Tracker to first phase"),
+        FBarrageAuthoringInteraction::InsertTrackerForPhase(Layer,First.BlockId));
+    if(!TestEqual(TEXT("Tracker inserted before Transition"),Layer.MotionBlocks.Num(),4))return false;
+    TestEqual(TEXT("Tracker inserted after first Movement"),Layer.MotionBlocks[1].Kind,EBarrageMotionBlockKind::Tracker);
+    TestEqual(TEXT("Transition retains ID"),Layer.MotionBlocks[2].BlockId,Transition.BlockId);
+    TestFalse(TEXT("Duplicate Tracker in same phase prevented"),
+        FBarrageAuthoringInteraction::InsertTrackerForPhase(Layer,First.BlockId));
+    TestTrue(TEXT("Independent Tracker allowed on next phase"),
+        FBarrageAuthoringInteraction::InsertTrackerForPhase(Layer,Second.BlockId));
+    FBarrageMotionProgram Program;
+    TestTrue(TEXT("Both tracked phases compile"),FBarrageStackPrograms::CompileMotion(Layer,Program));
+    TestTrue(TEXT("Each phase has its own Tracker"),
+        Program.NumPhases==2 && Program.Phases[0].bTracker && Program.Phases[1].bTracker);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBarrageMotionTrackerReorder50,
+    "Barrage.Editor.UX.TrackerPhaseReorder", BarrageAuthoringTests::Flags)
+bool FBarrageMotionTrackerReorder50::RunTest(const FString&)
+{
+    FBarragePatternLayer Layer;
+    FBarrageMotionBlock First, Second, Tracker, Transition;
+    First.Kind = EBarrageMotionBlockKind::Movement;
+    First.BlockId = FGuid::NewGuid();
+    First.Movement = EBarrageMovementMode::Profile;
+    First.SpeedMultiplier = 1.0f;
+    Second = First;
+    Second.BlockId = FGuid::NewGuid();
+    Second.Movement = EBarrageMovementMode::Curved;
+    Second.SpeedMultiplier = 2.0f;
+    Tracker.Kind = EBarrageMotionBlockKind::Tracker;
+    Tracker.BlockId = FGuid::NewGuid();
+    Tracker.TrackerTurnRateDegrees = 45.0f;
+    Transition.Kind = EBarrageMotionBlockKind::Transition;
+    Transition.BlockId = FGuid::NewGuid();
+    Transition.TransitionAgeSeconds = 1.0f;
+    Layer.MotionBlocks = {First, Tracker, Transition, Second};
+    TestTrue(TEXT("Move tracked phase after neighbor"),FBarrageAuthoringInteraction::MoveMotionPhase(Layer,First.BlockId,1));
+    if(!TestEqual(TEXT("Same number of Blocks"),Layer.MotionBlocks.Num(),4))return false;
+    TestEqual(TEXT("Curved phase moves first"),Layer.MotionBlocks[0].BlockId,Second.BlockId);
+    TestEqual(TEXT("Age transition stays between phases"),Layer.MotionBlocks[1].BlockId,Transition.BlockId);
+    TestEqual(TEXT("Profile phase moves second"),Layer.MotionBlocks[2].BlockId,First.BlockId);
+    TestEqual(TEXT("Tracker follows its Profile Movement"),Layer.MotionBlocks[3].BlockId,Tracker.BlockId);
+    FBarrageMotionProgram Compiled;
+    TestTrue(TEXT("Reordered Motion compiles"),FBarrageStackPrograms::CompileMotion(Layer,Compiled));
+    TestTrue(TEXT("Tracked second phase retained"),Compiled.NumPhases==2 && Compiled.Phases[1].bTracker);
+    TestTrue(TEXT("Move tracked phase back"),FBarrageAuthoringInteraction::MoveMotionPhase(Layer,First.BlockId,-1));
+    TestEqual(TEXT("Original tracked phase restored"),Layer.MotionBlocks[0].BlockId,First.BlockId);
+    TestFalse(TEXT("Cannot move first phase farther up"),FBarrageAuthoringInteraction::MoveMotionPhase(Layer,First.BlockId,-1));
+    return true;
+}
+
 #endif

@@ -88,7 +88,7 @@ void FBarragePatternSettingsCustomization::CustomizeChildren(TSharedRef<IPropert
             if (S.Direction==D::Rotating || S.Direction==D::Sweep) Add(TEXT("DirectionTurns"));
             if (S.Direction==D::Rotating) { Add(TEXT("bMultipleDirections"),true); if(S.bMultipleDirections) Add(TEXT("DirectionArms")); }
             if (S.Direction==D::Cone) { Add(TEXT("DirectionConeAngleDegrees")); Add(TEXT("bFillCone")); }
-            if (S.Movement!=V::Orbit) Add(TEXT("bAimAtTarget"));
+            if (S.Movement!=V::Orbit) { Add(TEXT("bAimAtTarget"),true); if(S.bAimAtTarget) Add(TEXT("AimStrength")); }
             }
             Section(TEXT("Movement")); Add(TEXT("Movement"),true);
             if (S.Movement==V::Orbit || S.Movement==V::Curved) Add(TEXT("AngularVelocityDegrees"));
